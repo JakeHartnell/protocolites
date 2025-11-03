@@ -93,23 +93,34 @@ contract ProtocolitesRendererSVG is Ownable, IProtocolitesRenderer {
         uint256 seed = uint256(keccak256(abi.encodePacked(dna, tokenId)));
         uint256 tempIndex = getTemperament(seed);
 
-        // Calculate SVG dimensions
-        uint256 charWidth = 12;
-        uint256 charHeight = 20;
+        // Calculate SVG dimensions (match JS renderer spacing)
+        uint256 fontSize = size == 24 ? 20 : 16;
+        uint256 charWidth = (fontSize * 6) / 10; // fontSize * 0.6
+        uint256 charHeight = fontSize;
         uint256 width = size * charWidth;
         uint256 height = size * charHeight;
 
+        // Make viewBox square using the larger dimension
+        uint256 viewSize = width > height ? width : height;
+
+        // Calculate horizontal offset to center the creature
+        uint256 xOffset = (viewSize - width) / 2;
+
         // Generate creature parts
-        string memory creature = renderAnimatedCreature(dna, isKid, seed);
+        string memory creature = renderAnimatedCreature(dna, isKid, seed, charWidth, charHeight, xOffset);
 
         // Build CSS animations
-        string memory animations = buildAnimations(tempIndex, familyColor);
+        string memory animations = buildAnimations(tempIndex, familyColor, fontSize);
 
         return string.concat(
             '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ',
-            LibString.toString(width),
+            LibString.toString(viewSize),
             " ",
-            LibString.toString(height),
+            LibString.toString(viewSize),
+            '" width="',
+            LibString.toString(viewSize),
+            '" height="',
+            LibString.toString(viewSize),
             '" style="background:#fff">',
             "<defs><style>",
             animations,
@@ -120,10 +131,12 @@ contract ProtocolitesRendererSVG is Ownable, IProtocolitesRenderer {
     }
 
     /// @notice Build CSS animations based on temperament
-    function buildAnimations(uint256 tempIndex, string memory color) private pure returns (string memory) {
+    function buildAnimations(uint256 tempIndex, string memory color, uint256 fontSize) private pure returns (string memory) {
         // Base styles
         string memory baseStyle = string.concat(
-            "text{font-family:'Courier New',monospace;font-size:16px;font-weight:400;fill:",
+            "text{font-family:'Courier New',monospace;font-size:",
+            LibString.toString(fontSize),
+            "px;font-weight:400;fill:",
             color,
             ";dominant-baseline:text-before-edge;}"
         );
@@ -266,7 +279,11 @@ contract ProtocolitesRendererSVG is Ownable, IProtocolitesRenderer {
         return "&#x2605;";
     }
 
-    function renderAnimatedCreature(uint256 dna, bool isKid, uint256 seed) private pure returns (string memory) {
+    function renderAnimatedCreature(uint256 dna, bool isKid, uint256 seed, uint256 charWidth, uint256 charHeight, uint256 xOffset)
+        private
+        pure
+        returns (string memory)
+    {
         uint256 size = isKid ? 16 : 24;
         uint256 cx = size / 2;
 
@@ -277,8 +294,8 @@ contract ProtocolitesRendererSVG is Ownable, IProtocolitesRenderer {
         string memory eyeChar = getEyeChar((dna >> 5) & 0x3);
         bool megaEyes = ((dna >> 7) & 0x1) == 1;
         string memory antennaTip = getAntennaTip((dna >> 8) & 0x7);
-        bool blockArms = ((dna >> 11) & 0x1) == 1;
-        bool blockLegs = ((dna >> 12) & 0x1) == 1;
+        bool lineArms = ((dna >> 11) & 0x1) == 1; // 1 = line style (inverted from blockArms)
+        bool lineLegs = ((dna >> 12) & 0x1) == 1; // 1 = line style (inverted from blockLegs)
         uint256 hatType = ((dna >> 13) & 0x7) % 5;
         bool hasCigarette = ((dna >> 16) & 0x1) == 1;
 
@@ -341,7 +358,9 @@ contract ProtocolitesRendererSVG is Ownable, IProtocolitesRenderer {
                 }
 
                 if (inBody) {
-                    result = string.concat(result, _renderTextWithClass(uint256(posX), posY, bodyChar, "body"));
+                    result = string.concat(
+                        result, _renderTextWithClass(uint256(posX), posY, bodyChar, "body", charWidth, charHeight, xOffset)
+                    );
                 }
             }
         }
@@ -353,28 +372,28 @@ contract ProtocolitesRendererSVG is Ownable, IProtocolitesRenderer {
 
         if (isKid) {
             if (eyeCount == 1) {
-                result = string.concat(result, _renderTextWithClass(cx, eyeY, eyeChar, "eye"));
+                result = string.concat(result, _renderTextWithClass(cx, eyeY, eyeChar, "eye", charWidth, charHeight, xOffset));
             } else if (eyeCount == 2) {
                 uint256 eyeSpacing = 1;
                 result = string.concat(
                     result,
-                    _renderTextWithClass(cx - eyeSpacing, eyeY, eyeChar, "eye"),
-                    _renderTextWithClass(cx + eyeSpacing, eyeY, eyeChar, "eye")
+                    _renderTextWithClass(cx - eyeSpacing, eyeY, eyeChar, "eye", charWidth, charHeight, xOffset),
+                    _renderTextWithClass(cx + eyeSpacing, eyeY, eyeChar, "eye", charWidth, charHeight, xOffset)
                 );
             } else {
                 result = string.concat(
                     result,
-                    _renderTextWithClass(cx - 2, eyeY, eyeChar, "eye"),
-                    _renderTextWithClass(cx, eyeY, eyeChar, "eye"),
-                    _renderTextWithClass(cx + 2, eyeY, eyeChar, "eye")
+                    _renderTextWithClass(cx - 2, eyeY, eyeChar, "eye", charWidth, charHeight, xOffset),
+                    _renderTextWithClass(cx, eyeY, eyeChar, "eye", charWidth, charHeight, xOffset),
+                    _renderTextWithClass(cx + 2, eyeY, eyeChar, "eye", charWidth, charHeight, xOffset)
                 );
             }
         } else {
             uint256 eyeSpacing = megaEyes ? 2 : 3;
             result = string.concat(
                 result,
-                _renderTextWithClass(cx - eyeSpacing, eyeY, eyeChar, "eye"),
-                _renderTextWithClass(cx + eyeSpacing, eyeY, eyeChar, "eye")
+                _renderTextWithClass(cx - eyeSpacing, eyeY, eyeChar, "eye", charWidth, charHeight, xOffset),
+                _renderTextWithClass(cx + eyeSpacing, eyeY, eyeChar, "eye", charWidth, charHeight, xOffset)
             );
         }
 
@@ -382,7 +401,8 @@ contract ProtocolitesRendererSVG is Ownable, IProtocolitesRenderer {
         seed = _random(seed);
         if ((seed % 10) > 3) {
             uint256 mouthY = eyeY + (isKid ? 2 : 3);
-            result = string.concat(result, _renderTextWithClass(cx, mouthY, unicode"─", "mouth"));
+            result =
+                string.concat(result, _renderTextWithClass(cx, mouthY, unicode"─", "mouth", charWidth, charHeight, xOffset));
         }
 
         // Cigarette
@@ -392,7 +412,15 @@ contract ProtocolitesRendererSVG is Ownable, IProtocolitesRenderer {
             bool cigRight = (seed % 2) == 0;
             uint256 cigX = cigRight ? (cx + 3) : (cx >= 3 ? cx - 3 : 0);
             if (cigX < size) {
-                result = string.concat(result, _renderTextWithClass(cigX, cigY, "~", "cigarette"));
+                result = string.concat(
+                    result, _renderTextWithClass(cigX, cigY, "~", "cigarette", charWidth, charHeight, xOffset)
+                );
+                // Add ember dot next to cigarette
+                if (cigX + 1 < size) {
+                    result = string.concat(
+                        result, _renderTextWithClass(cigX + 1, cigY, "&#x2219;", "cigarette", charWidth, charHeight, xOffset)
+                    );
+                }
             }
         }
 
@@ -401,19 +429,21 @@ contract ProtocolitesRendererSVG is Ownable, IProtocolitesRenderer {
         uint256 armCount = 1 + (seed % 4);
         seed = _random(seed);
         uint256 armLength = isKid ? (1 + (seed % 2)) : (2 + (seed % 4));
-        string memory armChar = blockArms ? bodyChar : unicode"─";
+        string memory armChar = lineArms ? unicode"─" : "&#x2588;"; // line style uses ─, block style uses solid █
 
         for (uint256 a = 0; a < armCount; a++) {
             uint256 currentArmY = bodyStartY + 2 + a * (isKid ? 1 : 2);
             if (currentArmY >= bodyStartY + bodyHeight) break;
             for (uint256 i = 1; i <= armLength; i++) {
                 if (cx - bodyWidth >= i) {
-                    result =
-                        string.concat(result, _renderTextWithClass(cx - bodyWidth - i, currentArmY, armChar, "arm"));
+                    result = string.concat(
+                        result, _renderTextWithClass(cx - bodyWidth - i, currentArmY, armChar, "arm", charWidth, charHeight, xOffset)
+                    );
                 }
                 if (cx + bodyWidth + i < size) {
-                    result =
-                        string.concat(result, _renderTextWithClass(cx + bodyWidth + i, currentArmY, armChar, "arm"));
+                    result = string.concat(
+                        result, _renderTextWithClass(cx + bodyWidth + i, currentArmY, armChar, "arm", charWidth, charHeight, xOffset)
+                    );
                 }
             }
         }
@@ -423,12 +453,12 @@ contract ProtocolitesRendererSVG is Ownable, IProtocolitesRenderer {
         uint256 legCount = 1 + (seed % 4);
         seed = _random(seed);
         uint256 legLength = isKid ? (1 + (seed % 2)) : (2 + (seed % 3));
-        string memory legChar = blockLegs ? bodyChar : unicode"│";
+        string memory legChar = lineLegs ? unicode"│" : "&#x2588;"; // line style uses │, block style uses solid █
         uint256 legY = bodyStartY + bodyHeight;
 
         if (legCount == 1) {
             for (uint256 i = 0; i < legLength; i++) {
-                result = string.concat(result, _renderTextWithClass(cx, legY + i, legChar, "leg"));
+                result = string.concat(result, _renderTextWithClass(cx, legY + i, legChar, "leg", charWidth, charHeight, xOffset));
             }
         } else if (legCount == 2) {
             uint256 legPos1 = cx - bodyWidth / 2;
@@ -436,8 +466,8 @@ contract ProtocolitesRendererSVG is Ownable, IProtocolitesRenderer {
             for (uint256 i = 0; i < legLength; i++) {
                 result = string.concat(
                     result,
-                    _renderTextWithClass(legPos1, legY + i, legChar, "leg"),
-                    _renderTextWithClass(legPos2, legY + i, legChar, "leg")
+                    _renderTextWithClass(legPos1, legY + i, legChar, "leg", charWidth, charHeight, xOffset),
+                    _renderTextWithClass(legPos2, legY + i, legChar, "leg", charWidth, charHeight, xOffset)
                 );
             }
         } else if (legCount >= 3) {
@@ -447,9 +477,9 @@ contract ProtocolitesRendererSVG is Ownable, IProtocolitesRenderer {
             for (uint256 i = 0; i < legLength; i++) {
                 result = string.concat(
                     result,
-                    _renderTextWithClass(legPos1, legY + i, legChar, "leg"),
-                    _renderTextWithClass(legPos2, legY + i, legChar, "leg"),
-                    _renderTextWithClass(legPos3, legY + i, legChar, "leg")
+                    _renderTextWithClass(legPos1, legY + i, legChar, "leg", charWidth, charHeight, xOffset),
+                    _renderTextWithClass(legPos2, legY + i, legChar, "leg", charWidth, charHeight, xOffset),
+                    _renderTextWithClass(legPos3, legY + i, legChar, "leg", charWidth, charHeight, xOffset)
                 );
             }
         }
@@ -464,7 +494,9 @@ contract ProtocolitesRendererSVG is Ownable, IProtocolitesRenderer {
             for (uint256 i = 1; i <= antennaLength; i++) {
                 string memory aChar = (i == antennaLength) ? antennaTip : unicode"│";
                 string memory aClass = (i == antennaLength) ? "antenna-tip" : "antenna";
-                result = string.concat(result, _renderTextWithClass(cx, bodyStartY - i, aChar, aClass));
+                result = string.concat(
+                    result, _renderTextWithClass(cx, bodyStartY - i, aChar, aClass, charWidth, charHeight, xOffset)
+                );
             }
         } else if (antennaCount == 2) {
             uint256 aPos1 = cx - bodyWidth / 2;
@@ -474,8 +506,8 @@ contract ProtocolitesRendererSVG is Ownable, IProtocolitesRenderer {
                 string memory aClass = (i == antennaLength) ? "antenna-tip" : "antenna";
                 result = string.concat(
                     result,
-                    _renderTextWithClass(aPos1, bodyStartY - i, aChar, aClass),
-                    _renderTextWithClass(aPos2, bodyStartY - i, aChar, aClass)
+                    _renderTextWithClass(aPos1, bodyStartY - i, aChar, aClass, charWidth, charHeight, xOffset),
+                    _renderTextWithClass(aPos2, bodyStartY - i, aChar, aClass, charWidth, charHeight, xOffset)
                 );
             }
         } else if (antennaCount >= 3) {
@@ -487,9 +519,9 @@ contract ProtocolitesRendererSVG is Ownable, IProtocolitesRenderer {
                 string memory aClass = (i == antennaLength) ? "antenna-tip" : "antenna";
                 result = string.concat(
                     result,
-                    _renderTextWithClass(aPos1, bodyStartY - i, aChar, aClass),
-                    _renderTextWithClass(aPos2, bodyStartY - i, aChar, aClass),
-                    _renderTextWithClass(aPos3, bodyStartY - i, aChar, aClass)
+                    _renderTextWithClass(aPos1, bodyStartY - i, aChar, aClass, charWidth, charHeight, xOffset),
+                    _renderTextWithClass(aPos2, bodyStartY - i, aChar, aClass, charWidth, charHeight, xOffset),
+                    _renderTextWithClass(aPos3, bodyStartY - i, aChar, aClass, charWidth, charHeight, xOffset)
                 );
             }
         }
@@ -498,36 +530,50 @@ contract ProtocolitesRendererSVG is Ownable, IProtocolitesRenderer {
         if (hatType > 0) {
             uint256 hatY = bodyStartY - antennaLength - 1;
             if (hatType == 1) {
+                // Top hat with brim and stem
                 for (uint256 dx = 0; dx <= 4; dx++) {
                     if (cx - 2 + dx < size) {
-                        result = string.concat(result, _renderTextWithClass(cx - 2 + dx, hatY, unicode"▀", "hat"));
+                        result = string.concat(
+                            result, _renderTextWithClass(cx - 2 + dx, hatY, unicode"▀", "hat", charWidth, charHeight, xOffset)
+                        );
                     }
                 }
+                // Add stem below brim (match JS renderer)
+                if (hatY + 1 < size) {
+                    result = string.concat(
+                        result, _renderTextWithClass(cx, hatY + 1, "&#x2588;", "hat", charWidth, charHeight, xOffset)
+                    );
+                }
             } else if (hatType == 2) {
+                // Flat hat
                 for (uint256 dx = 0; dx <= 4; dx++) {
                     if (cx - 2 + dx < size) {
-                        result = string.concat(result, _renderTextWithClass(cx - 2 + dx, hatY, unicode"═", "hat"));
+                        result = string.concat(
+                            result, _renderTextWithClass(cx - 2 + dx, hatY, unicode"═", "hat", charWidth, charHeight, xOffset)
+                        );
                     }
                 }
             } else if (hatType == 3) {
+                // Double hat
                 for (uint256 dx = 0; dx <= 4; dx++) {
                     if (cx - 2 + dx < size && hatY > 0) {
                         result = string.concat(
                             result,
-                            _renderTextWithClass(cx - 2 + dx, hatY - 1, unicode"▀", "hat"),
-                            _renderTextWithClass(cx - 2 + dx, hatY, unicode"▄", "hat")
+                            _renderTextWithClass(cx - 2 + dx, hatY - 1, unicode"▀", "hat", charWidth, charHeight, xOffset),
+                            _renderTextWithClass(cx - 2 + dx, hatY, unicode"▄", "hat", charWidth, charHeight, xOffset)
                         );
                     }
                 }
             } else if (hatType == 4) {
+                // Fancy hat
                 if (cx >= 2 && cx + 2 < size) {
                     result = string.concat(
                         result,
-                        _renderTextWithClass(cx - 2, hatY, unicode"╔", "hat"),
-                        _renderTextWithClass(cx - 1, hatY, unicode"═", "hat"),
-                        _renderTextWithClass(cx, hatY, unicode"═", "hat"),
-                        _renderTextWithClass(cx + 1, hatY, unicode"═", "hat"),
-                        _renderTextWithClass(cx + 2, hatY, unicode"╗", "hat")
+                        _renderTextWithClass(cx - 2, hatY, unicode"╔", "hat", charWidth, charHeight, xOffset),
+                        _renderTextWithClass(cx - 1, hatY, unicode"═", "hat", charWidth, charHeight, xOffset),
+                        _renderTextWithClass(cx, hatY, unicode"═", "hat", charWidth, charHeight, xOffset),
+                        _renderTextWithClass(cx + 1, hatY, unicode"═", "hat", charWidth, charHeight, xOffset),
+                        _renderTextWithClass(cx + 2, hatY, unicode"╗", "hat", charWidth, charHeight, xOffset)
                     );
                 }
             }
@@ -540,16 +586,20 @@ contract ProtocolitesRendererSVG is Ownable, IProtocolitesRenderer {
         return uint256(keccak256(abi.encodePacked(seed))) % 233280;
     }
 
-    function _renderTextWithClass(uint256 x, uint256 y, string memory char, string memory className)
-        private
-        pure
-        returns (string memory)
-    {
+    function _renderTextWithClass(
+        uint256 x,
+        uint256 y,
+        string memory char,
+        string memory className,
+        uint256 charWidth,
+        uint256 charHeight,
+        uint256 xOffset
+    ) private pure returns (string memory) {
         return string.concat(
             '<text x="',
-            LibString.toString(x * 12),
+            LibString.toString(x * charWidth + xOffset),
             '" y="',
-            LibString.toString(y * 20),
+            LibString.toString(y * charHeight),
             '" class="',
             className,
             '">',
