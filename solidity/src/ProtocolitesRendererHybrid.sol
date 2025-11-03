@@ -132,8 +132,10 @@ contract ProtocolitesRendererHybrid is Ownable, IProtocolitesRenderer {
         // Decode DNA to get traits
         string memory familyColor = getFamilyColor(dna);
 
-        // Determine temperament from DNA
-        uint256 seed = uint256(keccak256(abi.encodePacked(dna, tokenId)));
+        // Initialize seed from DNA hash (match JS renderer's hashCode function)
+        // JS: hashCode(dna) then uses LCG: (seed * 9301 + 49297) % 233280
+        // We need to match this exactly for same random sequence
+        uint256 seed = _hashCode(dna);
         uint256 tempIndex = getTemperament(seed);
 
         // Calculate SVG dimensions (match JS renderer spacing)
@@ -143,11 +145,8 @@ contract ProtocolitesRendererHybrid is Ownable, IProtocolitesRenderer {
         uint256 width = size * charWidth;
         uint256 height = size * charHeight;
 
-        // Make viewBox square using the larger dimension
-        uint256 viewSize = width > height ? width : height;
-
-        // Calculate horizontal offset to center the creature
-        uint256 xOffset = (viewSize - width) / 2;
+        // No offset needed - render in grid coordinates, viewBox will be sized to fit
+        uint256 xOffset = 0;
 
         // Generate creature parts
         string memory creature = renderAnimatedCreature(dna, isKid, seed, charWidth, charHeight, xOffset);
@@ -157,13 +156,13 @@ contract ProtocolitesRendererHybrid is Ownable, IProtocolitesRenderer {
 
         return string.concat(
             '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ',
-            LibString.toString(viewSize),
+            LibString.toString(width),
             " ",
-            LibString.toString(viewSize),
+            LibString.toString(height),
             '" width="',
-            LibString.toString(viewSize),
+            LibString.toString(width),
             '" height="',
-            LibString.toString(viewSize),
+            LibString.toString(height),
             '" style="background:#fff">',
             "<defs><style>",
             animations,
@@ -171,6 +170,25 @@ contract ProtocolitesRendererHybrid is Ownable, IProtocolitesRenderer {
             creature,
             "</svg>"
         );
+    }
+
+    /// @notice Hash function matching JS renderer's hashCode
+    /// @dev Implements: h = ((h << 5) - h) + s.charCodeAt(i); h &= h;
+    function _hashCode(uint256 dna) private pure returns (uint256) {
+        // Convert dna to hex string representation to match JS input
+        string memory dnaStr = LibString.toHexString(dna);
+        bytes memory dnaBytes = bytes(dnaStr);
+
+        int256 h = 0;
+        for (uint256 i = 0; i < dnaBytes.length; i++) {
+            unchecked {
+                h = ((h << 5) - h) + int256(uint256(uint8(dnaBytes[i])));
+                h = h & h; // Bitwise AND with itself (no-op but matches JS)
+            }
+        }
+
+        // Return absolute value
+        return uint256(h < 0 ? -h : h);
     }
 
     /// @notice Build CSS styles (animations removed)
@@ -209,28 +227,28 @@ contract ProtocolitesRendererHybrid is Ownable, IProtocolitesRenderer {
     }
 
     function getBodyChar(uint256 charIndex) private pure returns (string memory) {
-        if (charIndex == 0) return "&#x2588;";
-        if (charIndex == 1) return "&#x2593;";
-        if (charIndex == 2) return "&#x2592;";
-        return "&#x2591;";
+        if (charIndex == 0) return unicode"█"; // U+2588 Full Block
+        if (charIndex == 1) return unicode"▓"; // U+2593 Dark Shade
+        if (charIndex == 2) return unicode"▒"; // U+2592 Medium Shade
+        return unicode"░"; // U+2591 Light Shade
     }
 
     function getEyeChar(uint256 charIndex) private pure returns (string memory) {
-        if (charIndex == 0) return "&#x25cf;";
-        if (charIndex == 1) return "&#x25c9;";
-        if (charIndex == 2) return "&#x25ce;";
-        return "&#x25cb;";
+        if (charIndex == 0) return unicode"●"; // U+25CF Black Circle
+        if (charIndex == 1) return unicode"◉"; // U+25C9 Fisheye
+        if (charIndex == 2) return unicode"◎"; // U+25CE Bullseye
+        return unicode"○"; // U+25CB White Circle
     }
 
     function getAntennaTip(uint256 tipIndex) private pure returns (string memory) {
         tipIndex = tipIndex % 7;
-        if (tipIndex == 0) return "&#x25cf;";
-        if (tipIndex == 1) return "&#x25c9;";
-        if (tipIndex == 2) return "&#x25cb;";
-        if (tipIndex == 3) return "&#x25ce;";
-        if (tipIndex == 4) return "&#x2726;";
-        if (tipIndex == 5) return "&#x2727;";
-        return "&#x2605;";
+        if (tipIndex == 0) return unicode"●"; // U+25CF Black Circle
+        if (tipIndex == 1) return unicode"◉"; // U+25C9 Fisheye
+        if (tipIndex == 2) return unicode"○"; // U+25CB White Circle
+        if (tipIndex == 3) return unicode"◎"; // U+25CE Bullseye
+        if (tipIndex == 4) return unicode"✦"; // U+2726 Black Four Pointed Star
+        if (tipIndex == 5) return unicode"✧"; // U+2727 White Four Pointed Star
+        return unicode"★"; // U+2605 Black Star
     }
 
     function renderAnimatedCreature(uint256 dna, bool isKid, uint256 seed, uint256 charWidth, uint256 charHeight, uint256 xOffset)
@@ -259,7 +277,13 @@ contract ProtocolitesRendererHybrid is Ownable, IProtocolitesRenderer {
 
         string memory result = "";
 
-        // Render body
+        // Track body positions for arms/legs/antennas
+        // We'll use a dynamic array approach: store packed position data
+        // Format: array of uint256 where each element stores (y << 128) | x
+        uint256[] memory bodyPositions = new uint256[](size * size);
+        uint256 bodyPosCount = 0;
+
+        // Render body and track positions
         for (uint256 y = 0; y < bodyHeight; y++) {
             for (int256 x = -int256(bodyWidth); x <= int256(bodyWidth); x++) {
                 uint256 posY = bodyStartY + y;
@@ -306,7 +330,10 @@ contract ProtocolitesRendererHybrid is Ownable, IProtocolitesRenderer {
                         inBody = dist <= 1000;
                     } else {
                         int256 absX = relX < 0 ? -relX : relX;
-                        bool oddColumn = ((uint256(x) + bodyWidth) % 2) == 0;
+                        // Calculate column index safely: x ranges from -bodyWidth to +bodyWidth
+                        // To get 0-indexed column: add bodyWidth to shift range to 0..2*bodyWidth
+                        uint256 columnIndex = uint256(int256(bodyWidth) + x);
+                        bool oddColumn = (columnIndex % 2) == 0;
                         inBody = absX <= 900 && (oddColumn || relY < 800);
                     }
                 }
@@ -315,6 +342,9 @@ contract ProtocolitesRendererHybrid is Ownable, IProtocolitesRenderer {
                     result = string.concat(
                         result, _renderTextWithClass(uint256(posX), posY, bodyChar, "body", charWidth, charHeight, xOffset)
                     );
+                    // Track body position: pack y and x into single uint256
+                    bodyPositions[bodyPosCount] = (posY << 128) | uint256(posX);
+                    bodyPosCount++;
                 }
             }
         }
@@ -325,7 +355,7 @@ contract ProtocolitesRendererHybrid is Ownable, IProtocolitesRenderer {
         uint256 eyeCount = 1 + (seed % 3);
 
         if (isKid) {
-            if (eyeCount == 1) {
+            if (eyeCount == 1 && cx >= 1) {
                 // Create eye socket: clear 3x2 area and rebuild with eye and surrounding body
                 result = string.concat(
                     result,
@@ -334,9 +364,9 @@ contract ProtocolitesRendererHybrid is Ownable, IProtocolitesRenderer {
                     _renderTextWithClass(cx + 1, eyeY, bodyChar, "body", charWidth, charHeight, xOffset),
                     _renderTextWithClass(cx, eyeY + 1, bodyChar, "body", charWidth, charHeight, xOffset)
                 );
-            } else if (eyeCount == 2) {
+            } else if (eyeCount == 2 && cx >= 2) {
                 uint256 eyeSpacing = 1;
-                // Create two eye sockets
+                // Create two eye sockets (needs cx >= 2 for cx - eyeSpacing - 1 = cx - 2)
                 result = string.concat(
                     result,
                     // Left eye socket
@@ -350,7 +380,7 @@ contract ProtocolitesRendererHybrid is Ownable, IProtocolitesRenderer {
                     _renderTextWithClass(cx + eyeSpacing, eyeY + 1, bodyChar, "body", charWidth, charHeight, xOffset),
                     _renderTextWithClass(cx + eyeSpacing + 1, eyeY + 1, bodyChar, "body", charWidth, charHeight, xOffset)
                 );
-            } else {
+            } else if (cx >= 2) {
                 // 3 eyes - no socket structure in JS
                 result = string.concat(
                     result,
@@ -364,13 +394,14 @@ contract ProtocolitesRendererHybrid is Ownable, IProtocolitesRenderer {
             seed = _random(seed);
             uint256 adultEyeCount = 1 + (seed % 3);
 
-            if (adultEyeCount == 1) {
+            if (adultEyeCount == 1 && cx >= 2) {
                 // Mega eye: 5x3 block
                 for (uint256 dx = 0; dx < 5; dx++) {
+                    uint256 eyeX = cx - 2 + dx;
                     result = string.concat(
                         result,
-                        _renderTextWithClass(cx - 2 + dx, eyeY, bodyChar, "body", charWidth, charHeight, xOffset),
-                        _renderTextWithClass(cx - 2 + dx, eyeY + 2, bodyChar, "body", charWidth, charHeight, xOffset)
+                        _renderTextWithClass(eyeX, eyeY, bodyChar, "body", charWidth, charHeight, xOffset),
+                        _renderTextWithClass(eyeX, eyeY + 2, bodyChar, "body", charWidth, charHeight, xOffset)
                     );
                 }
                 result = string.concat(
@@ -381,17 +412,18 @@ contract ProtocolitesRendererHybrid is Ownable, IProtocolitesRenderer {
                     _renderTextWithClass(cx + 1, eyeY + 1, eyeChar, "eye", charWidth, charHeight, xOffset),
                     _renderTextWithClass(cx + 2, eyeY + 1, bodyChar, "body", charWidth, charHeight, xOffset)
                 );
-            } else if (adultEyeCount == 2) {
-                // Two eye sockets: 3x3 blocks
+            } else if (adultEyeCount == 2 && cx >= 4) {
+                // Two eye sockets: 3x3 blocks (need cx >= 4 to fit left socket: cx - blockSpacing - 2 = cx - 4)
                 uint256 blockSpacing = 2;
                 // Left eye socket
                 for (uint256 dy = 0; dy < 3; dy++) {
                     for (uint256 dx = 0; dx < 3; dx++) {
                         bool isCenter = dy == 1 && dx == 1;
+                        uint256 leftEyeX = cx - blockSpacing - 2 + dx;
                         result = string.concat(
                             result,
                             _renderTextWithClass(
-                                cx - blockSpacing - 2 + dx,
+                                leftEyeX,
                                 eyeY + dy,
                                 isCenter ? eyeChar : bodyChar,
                                 isCenter ? "eye" : "body",
@@ -420,14 +452,16 @@ contract ProtocolitesRendererHybrid is Ownable, IProtocolitesRenderer {
                         );
                     }
                 }
-            } else {
-                // 3 eyes: 2x2 blocks
+            } else if (cx >= 4) {
+                // 3 eyes: 2x2 blocks (need cx >= 4 for leftmost eye at cx - 3 - 1 = cx - 4)
                 for (int256 i = -3; i <= 3; i += 3) {
                     for (uint256 dy = 0; dy < 2; dy++) {
+                        uint256 eyeX1 = uint256(int256(cx) + i);
+                        uint256 eyeX2 = uint256(int256(cx) + i - 1);
                         result = string.concat(
                             result,
-                            _renderTextWithClass(uint256(int256(cx) + i), eyeY + dy, eyeChar, "eye", charWidth, charHeight, xOffset),
-                            _renderTextWithClass(uint256(int256(cx) + i - 1), eyeY + dy, eyeChar, "eye", charWidth, charHeight, xOffset)
+                            _renderTextWithClass(eyeX1, eyeY + dy, eyeChar, "eye", charWidth, charHeight, xOffset),
+                            _renderTextWithClass(eyeX2, eyeY + dy, eyeChar, "eye", charWidth, charHeight, xOffset)
                         );
                     }
                 }
@@ -436,23 +470,27 @@ contract ProtocolitesRendererHybrid is Ownable, IProtocolitesRenderer {
 
         // Mouth
         seed = _random(seed);
-        if ((seed % 10) > 3) {
+        // JS: random() > 0.3 means 70% chance (values 0.3 to 1.0)
+        // Convert to: (seed % 10) >= 3 for 70% chance (values 3-9 = 7 out of 10)
+        if ((seed % 10) >= 3) {
             uint256 mouthY = eyeY + (isKid ? 2 : 3);
             // Always render center mouth
             result =
                 string.concat(result, _renderTextWithClass(cx, mouthY, unicode"─", "mouth", charWidth, charHeight, xOffset));
 
             // Randomly add left extension (50% chance)
+            // JS: random() > 0.5 means 50% chance
             seed = _random(seed);
-            if ((seed % 2) == 1 && cx > 0) {
+            if ((seed % 2) == 0 && cx > 0) {
                 result = string.concat(
                     result, _renderTextWithClass(cx - 1, mouthY, unicode"─", "mouth", charWidth, charHeight, xOffset)
                 );
             }
 
             // Randomly add right extension (50% chance)
+            // JS: random() > 0.5 means 50% chance
             seed = _random(seed);
-            if ((seed % 2) == 1 && cx + 1 < size) {
+            if ((seed % 2) == 0 && cx + 1 < size) {
                 result = string.concat(
                     result, _renderTextWithClass(cx + 1, mouthY, unicode"─", "mouth", charWidth, charHeight, xOffset)
                 );
@@ -463,6 +501,7 @@ contract ProtocolitesRendererHybrid is Ownable, IProtocolitesRenderer {
         if (hasCigarette) {
             uint256 cigY = eyeY + (isKid ? 2 : 3);
             seed = _random(seed);
+            // JS: random() > 0.5 ? 3 : -3 (right side if > 0.5)
             bool cigRight = (seed % 2) == 0;
             uint256 cigX = cigRight ? (cx + 3) : (cx >= 3 ? cx - 3 : 0);
             if (cigX < size) {
@@ -476,200 +515,251 @@ contract ProtocolitesRendererHybrid is Ownable, IProtocolitesRenderer {
                 // Add ember dot next to cigarette
                 if (cigX + 1 < size) {
                     result = string.concat(
-                        result, _renderTextWithClass(cigX + 1, cigY, "&#x2219;", "cigarette", charWidth, charHeight, xOffset)
+                        result, _renderTextWithClass(cigX + 1, cigY, unicode"∙", "cigarette", charWidth, charHeight, xOffset)
                     );
                 }
             }
         }
 
-        // Arms
+        // Arms - scan actual body edges per row
         seed = _random(seed);
         uint256 armCount = 1 + (seed % 4);
         seed = _random(seed);
         uint256 armLength = isKid ? (1 + (seed % 2)) : (2 + (seed % 4));
-        string memory armChar = lineArms ? unicode"─" : "&#x2588;"; // line style uses ─, block style uses solid █
+        string memory armChar = lineArms ? unicode"─" : unicode"█"; // line style uses ─, block style uses solid █
 
         for (uint256 a = 0; a < armCount; a++) {
             uint256 currentArmY = bodyStartY + 2 + a * (isKid ? 1 : 2);
             if (currentArmY >= bodyStartY + bodyHeight) break;
-            for (uint256 i = 1; i <= armLength; i++) {
-                if (cx - bodyWidth >= i) {
-                    result = string.concat(
-                        result, _renderTextWithClass(cx - bodyWidth - i, currentArmY, armChar, "arm", charWidth, charHeight, xOffset)
-                    );
+
+            // Find left and right body edges at this Y coordinate
+            uint256 leftBodyEdge = cx;
+            uint256 rightBodyEdge = cx;
+            bool foundLeft = false;
+            bool foundRight = false;
+
+            for (uint256 i = 0; i < bodyPosCount; i++) {
+                uint256 posY = bodyPositions[i] >> 128;
+                uint256 posX = bodyPositions[i] & ((1 << 128) - 1);
+
+                if (posY == currentArmY) {
+                    if (!foundLeft || posX < leftBodyEdge) {
+                        leftBodyEdge = posX;
+                        foundLeft = true;
+                    }
+                    if (!foundRight || posX > rightBodyEdge) {
+                        rightBodyEdge = posX;
+                        foundRight = true;
+                    }
                 }
-                if (cx + bodyWidth + i < size) {
-                    result = string.concat(
-                        result, _renderTextWithClass(cx + bodyWidth + i, currentArmY, armChar, "arm", charWidth, charHeight, xOffset)
-                    );
+            }
+
+            // Draw arms extending from body edges
+            if (foundLeft && foundRight) {
+                for (uint256 i = 1; i <= armLength; i++) {
+                    if (leftBodyEdge >= i) {
+                        result = string.concat(
+                            result, _renderTextWithClass(leftBodyEdge - i, currentArmY, armChar, "arm", charWidth, charHeight, xOffset)
+                        );
+                    }
+                    if (rightBodyEdge + i < size) {
+                        result = string.concat(
+                            result, _renderTextWithClass(rightBodyEdge + i, currentArmY, armChar, "arm", charWidth, charHeight, xOffset)
+                        );
+                    }
                 }
             }
         }
 
-        // Legs
+        // Legs - scan actual body bottom positions
         seed = _random(seed);
         uint256 legCount = 1 + (seed % 4);
         seed = _random(seed);
         uint256 legLength = isKid ? (1 + (seed % 2)) : (2 + (seed % 3));
-        string memory legChar = lineLegs ? unicode"│" : "&#x2588;"; // line style uses │, block style uses solid █
+        string memory legChar = lineLegs ? unicode"│" : unicode"█"; // line style uses │, block style uses solid █
         uint256 legY = bodyStartY + bodyHeight;
 
-        if (legCount == 1) {
-            for (uint256 i = 0; i < legLength; i++) {
-                result = string.concat(result, _renderTextWithClass(cx, legY + i, legChar, "leg", charWidth, charHeight, xOffset));
-            }
-        } else if (legCount == 2) {
-            // Place legs at 25% and 75% of body width (matching JS renderer)
-            uint256 legPos1 = cx - (bodyWidth * 3) / 4;
-            uint256 legPos2 = cx + (bodyWidth * 3) / 4;
-            for (uint256 i = 0; i < legLength; i++) {
-                result = string.concat(
-                    result,
-                    _renderTextWithClass(legPos1, legY + i, legChar, "leg", charWidth, charHeight, xOffset),
-                    _renderTextWithClass(legPos2, legY + i, legChar, "leg", charWidth, charHeight, xOffset)
-                );
-            }
-        } else if (legCount == 3) {
-            // Place legs at edges and center
-            uint256 legPos1 = cx - bodyWidth;
-            uint256 legPos2 = cx;
-            uint256 legPos3 = cx + bodyWidth;
-            for (uint256 i = 0; i < legLength; i++) {
-                result = string.concat(
-                    result,
-                    _renderTextWithClass(legPos1, legY + i, legChar, "leg", charWidth, charHeight, xOffset),
-                    _renderTextWithClass(legPos2, legY + i, legChar, "leg", charWidth, charHeight, xOffset),
-                    _renderTextWithClass(legPos3, legY + i, legChar, "leg", charWidth, charHeight, xOffset)
-                );
-            }
-        } else {
-            // 4 legs: place at 0%, 33%, 66%, 100% of body width
-            uint256 legPos1 = cx - bodyWidth;
-            uint256 legPos2 = cx - bodyWidth / 3;
-            uint256 legPos3 = cx + bodyWidth / 3;
-            uint256 legPos4 = cx + bodyWidth;
-            for (uint256 i = 0; i < legLength; i++) {
-                result = string.concat(
-                    result,
-                    _renderTextWithClass(legPos1, legY + i, legChar, "leg", charWidth, charHeight, xOffset),
-                    _renderTextWithClass(legPos2, legY + i, legChar, "leg", charWidth, charHeight, xOffset),
-                    _renderTextWithClass(legPos3, legY + i, legChar, "leg", charWidth, charHeight, xOffset),
-                    _renderTextWithClass(legPos4, legY + i, legChar, "leg", charWidth, charHeight, xOffset)
-                );
+        // Collect all X positions where body exists at the bottom row
+        uint256[] memory bodyBottomPositions = new uint256[](size);
+        uint256 bottomCount = 0;
+        if (legY > 0) { // Ensure legY - 1 doesn't underflow
+            for (uint256 i = 0; i < bodyPosCount; i++) {
+                uint256 posY = bodyPositions[i] >> 128;
+                uint256 posX = bodyPositions[i] & ((1 << 128) - 1);
+                if (posY == legY - 1) {
+                    bodyBottomPositions[bottomCount] = posX;
+                    bottomCount++;
+                }
             }
         }
 
-        // Antennas
+        // Select leg positions based on count
+        if (bottomCount > 0) {
+            uint256[] memory legPositions = new uint256[](4);
+            uint256 legPosCount = 0;
+
+            if (legCount == 1) {
+                legPositions[0] = bodyBottomPositions[bottomCount / 2];
+                legPosCount = 1;
+            } else if (legCount == 2) {
+                // Use safer index calculation with bounds checking
+                uint256 idx1 = (bottomCount > 4) ? (bottomCount / 4) : 0;
+                uint256 idx2 = (bottomCount > 4) ? (bottomCount * 3 / 4) : (bottomCount > 1 ? bottomCount - 1 : 0);
+                legPositions[0] = bodyBottomPositions[idx1];
+                legPositions[1] = bodyBottomPositions[idx2];
+                legPosCount = 2;
+            } else if (legCount == 3) {
+                legPositions[0] = bodyBottomPositions[0];
+                legPositions[1] = bodyBottomPositions[bottomCount / 2];
+                legPositions[2] = bodyBottomPositions[bottomCount - 1];
+                legPosCount = 3;
+            } else {
+                // Use safer index calculation
+                uint256 idx1 = 0;
+                uint256 idx2 = (bottomCount > 3) ? (bottomCount / 3) : (bottomCount > 1 ? 1 : 0);
+                uint256 idx3 = (bottomCount > 3) ? (bottomCount * 2 / 3) : (bottomCount > 2 ? 2 : (bottomCount > 1 ? 1 : 0));
+                uint256 idx4 = bottomCount > 1 ? bottomCount - 1 : 0;
+                legPositions[0] = bodyBottomPositions[idx1];
+                legPositions[1] = bodyBottomPositions[idx2];
+                legPositions[2] = bodyBottomPositions[idx3];
+                legPositions[3] = bodyBottomPositions[idx4];
+                legPosCount = 4;
+            }
+
+            // Draw legs
+            for (uint256 l = 0; l < legPosCount; l++) {
+                uint256 legX = legPositions[l];
+                if (legX < size) {
+                    for (uint256 i = 0; i < legLength; i++) {
+                        if (legY + i < size) {
+                            result = string.concat(
+                                result, _renderTextWithClass(legX, legY + i, legChar, "leg", charWidth, charHeight, xOffset)
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
+        // Antennas - scan actual body top positions
         seed = _random(seed);
         uint256 antennaCount = 1 + (seed % 4);
         seed = _random(seed);
         uint256 antennaLength = isKid ? 1 : (1 + (seed % 2));
 
-        if (antennaCount == 1) {
-            for (uint256 i = 1; i <= antennaLength; i++) {
-                string memory aChar = (i == antennaLength) ? antennaTip : unicode"│";
-                string memory aClass = (i == antennaLength) ? "antenna-tip" : "antenna";
-                result = string.concat(
-                    result, _renderTextWithClass(cx, bodyStartY - i, aChar, aClass, charWidth, charHeight, xOffset)
-                );
+        // Collect all X positions where body exists at the top row
+        uint256[] memory bodyTopPositions = new uint256[](size);
+        uint256 topCount = 0;
+        for (uint256 i = 0; i < bodyPosCount; i++) {
+            uint256 posY = bodyPositions[i] >> 128;
+            uint256 posX = bodyPositions[i] & ((1 << 128) - 1);
+            if (posY == bodyStartY) {
+                bodyTopPositions[topCount] = posX;
+                topCount++;
             }
-        } else if (antennaCount == 2) {
-            // Place antennas at 25% and 75% of body width (matching JS renderer)
-            uint256 aPos1 = cx - (bodyWidth * 3) / 4;
-            uint256 aPos2 = cx + (bodyWidth * 3) / 4;
-            for (uint256 i = 1; i <= antennaLength; i++) {
-                string memory aChar = (i == antennaLength) ? antennaTip : unicode"│";
-                string memory aClass = (i == antennaLength) ? "antenna-tip" : "antenna";
-                result = string.concat(
-                    result,
-                    _renderTextWithClass(aPos1, bodyStartY - i, aChar, aClass, charWidth, charHeight, xOffset),
-                    _renderTextWithClass(aPos2, bodyStartY - i, aChar, aClass, charWidth, charHeight, xOffset)
-                );
+        }
+
+        // Select antenna positions based on count
+        if (topCount > 0) {
+            uint256[] memory antennaPositions = new uint256[](4);
+            uint256 antennaPosCount = 0;
+
+            if (antennaCount == 1) {
+                antennaPositions[0] = bodyTopPositions[topCount / 2];
+                antennaPosCount = 1;
+            } else if (antennaCount == 2) {
+                // Use safer index calculation with bounds checking
+                uint256 idx1 = (topCount > 4) ? (topCount / 4) : 0;
+                uint256 idx2 = (topCount > 4) ? (topCount * 3 / 4) : (topCount > 1 ? topCount - 1 : 0);
+                antennaPositions[0] = bodyTopPositions[idx1];
+                antennaPositions[1] = bodyTopPositions[idx2];
+                antennaPosCount = 2;
+            } else if (antennaCount == 3) {
+                antennaPositions[0] = bodyTopPositions[0];
+                antennaPositions[1] = bodyTopPositions[topCount / 2];
+                antennaPositions[2] = bodyTopPositions[topCount - 1];
+                antennaPosCount = 3;
+            } else {
+                // Use safer index calculation
+                uint256 idx1 = 0;
+                uint256 idx2 = (topCount > 3) ? (topCount / 3) : (topCount > 1 ? 1 : 0);
+                uint256 idx3 = (topCount > 3) ? (topCount * 2 / 3) : (topCount > 2 ? 2 : (topCount > 1 ? 1 : 0));
+                uint256 idx4 = topCount > 1 ? topCount - 1 : 0;
+                antennaPositions[0] = bodyTopPositions[idx1];
+                antennaPositions[1] = bodyTopPositions[idx2];
+                antennaPositions[2] = bodyTopPositions[idx3];
+                antennaPositions[3] = bodyTopPositions[idx4];
+                antennaPosCount = 4;
             }
-        } else if (antennaCount == 3) {
-            // Place antennas at edges and center
-            uint256 aPos1 = cx - bodyWidth;
-            uint256 aPos2 = cx;
-            uint256 aPos3 = cx + bodyWidth;
-            for (uint256 i = 1; i <= antennaLength; i++) {
-                string memory aChar = (i == antennaLength) ? antennaTip : unicode"│";
-                string memory aClass = (i == antennaLength) ? "antenna-tip" : "antenna";
-                result = string.concat(
-                    result,
-                    _renderTextWithClass(aPos1, bodyStartY - i, aChar, aClass, charWidth, charHeight, xOffset),
-                    _renderTextWithClass(aPos2, bodyStartY - i, aChar, aClass, charWidth, charHeight, xOffset),
-                    _renderTextWithClass(aPos3, bodyStartY - i, aChar, aClass, charWidth, charHeight, xOffset)
-                );
-            }
-        } else {
-            // 4 antennas: place at 0%, 33%, 66%, 100% of body width
-            uint256 aPos1 = cx - bodyWidth;
-            uint256 aPos2 = cx - bodyWidth / 3;
-            uint256 aPos3 = cx + bodyWidth / 3;
-            uint256 aPos4 = cx + bodyWidth;
-            for (uint256 i = 1; i <= antennaLength; i++) {
-                string memory aChar = (i == antennaLength) ? antennaTip : unicode"│";
-                string memory aClass = (i == antennaLength) ? "antenna-tip" : "antenna";
-                result = string.concat(
-                    result,
-                    _renderTextWithClass(aPos1, bodyStartY - i, aChar, aClass, charWidth, charHeight, xOffset),
-                    _renderTextWithClass(aPos2, bodyStartY - i, aChar, aClass, charWidth, charHeight, xOffset),
-                    _renderTextWithClass(aPos3, bodyStartY - i, aChar, aClass, charWidth, charHeight, xOffset),
-                    _renderTextWithClass(aPos4, bodyStartY - i, aChar, aClass, charWidth, charHeight, xOffset)
-                );
+
+            // Draw antennas
+            for (uint256 a = 0; a < antennaPosCount; a++) {
+                uint256 antennaX = antennaPositions[a];
+                for (uint256 i = 1; i <= antennaLength; i++) {
+                    // Check for underflow: bodyStartY must be >= i
+                    if (bodyStartY >= i) {
+                        uint256 antennaY = bodyStartY - i;
+                        string memory aChar = (i == antennaLength) ? antennaTip : unicode"│";
+                        string memory aClass = (i == antennaLength) ? "antenna-tip" : "antenna";
+                        result = string.concat(
+                            result, _renderTextWithClass(antennaX, antennaY, aChar, aClass, charWidth, charHeight, xOffset)
+                        );
+                    }
+                }
             }
         }
 
         // Hat
-        if (hatType > 0) {
+        if (hatType > 0 && bodyStartY > antennaLength + 1) { // Check for underflow: need bodyStartY >= antennaLength + 2
             uint256 hatY = bodyStartY - antennaLength - 1;
-            if (hatType == 1) {
+            if (hatType == 1 && cx >= 2) {
                 // Top hat with brim and stem
                 for (uint256 dx = 0; dx <= 4; dx++) {
-                    if (cx - 2 + dx < size) {
+                    uint256 hatX = cx - 2 + dx;
+                    if (hatX < size) {
                         result = string.concat(
-                            result, _renderTextWithClass(cx - 2 + dx, hatY, unicode"▀", "hat", charWidth, charHeight, xOffset)
+                            result, _renderTextWithClass(hatX, hatY, unicode"▀", "hat", charWidth, charHeight, xOffset)
                         );
                     }
                 }
                 // Add stem below brim (match JS renderer)
                 if (hatY + 1 < size) {
                     result = string.concat(
-                        result, _renderTextWithClass(cx, hatY + 1, "&#x2588;", "hat", charWidth, charHeight, xOffset)
+                        result, _renderTextWithClass(cx, hatY + 1, unicode"█", "hat", charWidth, charHeight, xOffset)
                     );
                 }
-            } else if (hatType == 2) {
+            } else if (hatType == 2 && cx >= 2) {
                 // Flat hat
                 for (uint256 dx = 0; dx <= 4; dx++) {
-                    if (cx - 2 + dx < size) {
+                    uint256 hatX = cx - 2 + dx;
+                    if (hatX < size) {
                         result = string.concat(
-                            result, _renderTextWithClass(cx - 2 + dx, hatY, unicode"═", "hat", charWidth, charHeight, xOffset)
+                            result, _renderTextWithClass(hatX, hatY, unicode"═", "hat", charWidth, charHeight, xOffset)
                         );
                     }
                 }
-            } else if (hatType == 3) {
-                // Double hat
+            } else if (hatType == 3 && cx >= 2 && hatY > 0) {
+                // Double hat (need hatY >= 1 to render hatY-1)
                 for (uint256 dx = 0; dx <= 4; dx++) {
-                    if (cx - 2 + dx < size && hatY > 0) {
+                    uint256 hatX = cx - 2 + dx;
+                    if (hatX < size) {
                         result = string.concat(
                             result,
-                            _renderTextWithClass(cx - 2 + dx, hatY - 1, unicode"▀", "hat", charWidth, charHeight, xOffset),
-                            _renderTextWithClass(cx - 2 + dx, hatY, unicode"▄", "hat", charWidth, charHeight, xOffset)
+                            _renderTextWithClass(hatX, hatY - 1, unicode"▀", "hat", charWidth, charHeight, xOffset),
+                            _renderTextWithClass(hatX, hatY, unicode"▄", "hat", charWidth, charHeight, xOffset)
                         );
                     }
                 }
-            } else if (hatType == 4) {
+            } else if (hatType == 4 && cx >= 2 && cx + 2 < size) {
                 // Fancy hat
-                if (cx >= 2 && cx + 2 < size) {
-                    result = string.concat(
-                        result,
-                        _renderTextWithClass(cx - 2, hatY, unicode"╔", "hat", charWidth, charHeight, xOffset),
-                        _renderTextWithClass(cx - 1, hatY, unicode"═", "hat", charWidth, charHeight, xOffset),
-                        _renderTextWithClass(cx, hatY, unicode"═", "hat", charWidth, charHeight, xOffset),
-                        _renderTextWithClass(cx + 1, hatY, unicode"═", "hat", charWidth, charHeight, xOffset),
-                        _renderTextWithClass(cx + 2, hatY, unicode"╗", "hat", charWidth, charHeight, xOffset)
-                    );
-                }
+                result = string.concat(
+                    result,
+                    _renderTextWithClass(cx - 2, hatY, unicode"╔", "hat", charWidth, charHeight, xOffset),
+                    _renderTextWithClass(cx - 1, hatY, unicode"═", "hat", charWidth, charHeight, xOffset),
+                    _renderTextWithClass(cx, hatY, unicode"═", "hat", charWidth, charHeight, xOffset),
+                    _renderTextWithClass(cx + 1, hatY, unicode"═", "hat", charWidth, charHeight, xOffset),
+                    _renderTextWithClass(cx + 2, hatY, unicode"╗", "hat", charWidth, charHeight, xOffset)
+                );
             }
         }
 
@@ -677,7 +767,10 @@ contract ProtocolitesRendererHybrid is Ownable, IProtocolitesRenderer {
     }
 
     function _random(uint256 seed) private pure returns (uint256) {
-        return uint256(keccak256(abi.encodePacked(seed))) % 233280;
+        // Match JS LCG: seed = (seed * 9301 + 49297) % 233280
+        unchecked {
+            return (seed * 9301 + 49297) % 233280;
+        }
     }
 
     function _renderTextWithClass(
