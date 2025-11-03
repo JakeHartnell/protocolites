@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1.0" />
+    <title>Protocolite #1</title>
+    <style>
+      @import url("https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@100;200;300;400&display=swap");
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        width: 100%;
+        height: 100%;
+        margin: 0;
+        padding: 0;
+        min-width: 600px;
+        min-height: 600px;
+      }
+      body {
+        font-family: "JetBrains Mono", "Courier New", monospace;
+        background: #fff;
+        color: #000;
+        line-height: 1;
+        font-size: 12px;
+        font-weight: 200;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        overflow: hidden;
+      }
+      .container {
+        text-align: center;
+        padding: 30px;
+        position: relative;
+      }
+      .creature-container {
+        position: relative;
+        display: inline-block;
+        font-family: "Courier New", monospace;
+        line-height: 1;
+        -webkit-font-smoothing: none;
+        -moz-osx-font-smoothing: unset;
+        font-smooth: never;
+        text-rendering: optimizeSpeed;
+      }
+      .creature-char {
+        position: absolute;
+        font-family: "Courier New", monospace;
+        white-space: pre;
+        user-select: none;
+        pointer-events: none;
+        will-change: transform;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <div class="creature-container" id="creature"></div>
+    </div>
+    <script>
+      const tokenId=1;const dna="0xfda4e25fa8ca3b0c902f75fe22b5836701c82a707335f8e5c257e5ed47bfcca5";const isKid=false;const parentDna="0x00";const size=24;
+    </script>
+    <script src="renderer-v3.js"></script>
+  </body>
+</html>
