@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ProtocolitesRendererV3 SVG Preview</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Courier New', monospace;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 40px 20px;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        h1 {
+            text-align: center;
+            color: white;
+            margin-bottom: 40px;
+            font-size: 32px;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+        }
+
+        .controls {
+            background: white;
+            padding: 20px;
+            border-radius: 12px;
+            margin-bottom: 30px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+
+        .control-row {
+            margin-bottom: 15px;
+        }
+
+        label {
+            display: inline-block;
+            width: 150px;
+            font-weight: bold;
+            color: #333;
+        }
+
+        input[type="text"] {
+            width: 600px;
+            padding: 8px;
+            border: 2px solid #ddd;
+            border-radius: 4px;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+        }
+
+        input[type="checkbox"] {
+            margin-left: 10px;
+        }
+
+        button {
+            background: #667eea;
+            color: white;
+            border: none;
+            padding: 12px 30px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 16px;
+            font-weight: bold;
+            transition: background 0.3s;
+        }
+
+        button:hover {
+            background: #5568d3;
+        }
+
+        .output-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+            gap: 30px;
+            margin-top: 30px;
+        }
+
+        .preview-card {
+            background: white;
+            padding: 20px;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+
+        .preview-card h2 {
+            margin-bottom: 15px;
+            color: #333;
+            font-size: 18px;
+        }
+
+        .svg-container {
+            border: 2px solid #eee;
+            padding: 20px;
+            border-radius: 8px;
+            background: white;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 400px;
+        }
+
+        .svg-container svg {
+            max-width: 100%;
+            height: auto;
+            border: 1px solid #ddd;
+        }
+
+        .metadata {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 8px;
+            margin-top: 15px;
+            font-size: 12px;
+            max-height: 300px;
+            overflow-y: auto;
+        }
+
+        .metadata pre {
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+
+        .info-box {
+            background: #e3f2fd;
+            border-left: 4px solid #2196f3;
+            padding: 15px;
+            margin-bottom: 20px;
+            border-radius: 4px;
+        }
+
+        .info-box strong {
+            color: #1976d2;
+        }
+
+        .examples {
+            display: flex;
+            gap: 10px;
+            margin-top: 15px;
+            flex-wrap: wrap;
+        }
+
+        .example-btn {
+            background: #f0f0f0;
+            color: #333;
+            border: 1px solid #ddd;
+            padding: 8px 15px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: all 0.2s;
+        }
+
+        .example-btn:hover {
+            background: #e0e0e0;
+            border-color: #999;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🧬 ProtocolitesRendererV3 SVG Preview</h1>
+
+        <div class="info-box">
+            <strong>What's New in V3:</strong> This renderer now generates a static SVG image for the <code>image</code> field in metadata, ensuring OpenSea and Rarible can display thumbnails. The animated HTML version is still available in <code>animation_url</code>.
+        </div>
+
+        <div class="controls">
+            <h2>Generate Protocolite SVG</h2>
+            <div class="control-row">
+                <label for="dnaInput">DNA (hex):</label>
+                <input type="text" id="dnaInput" value="0x123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" placeholder="Enter DNA hex value">
+            </div>
+            <div class="control-row">
+                <label for="isKidCheckbox">Is Child:</label>
+                <input type="checkbox" id="isKidCheckbox">
+            </div>
+            <div class="control-row">
+                <button onclick="generateSVG()">Generate SVG</button>
+            </div>
+
+            <div class="examples">
+                <strong>Examples:</strong>
+                <button class="example-btn" onclick="loadExample('red')">Red Family</button>
+                <button class="example-btn" onclick="loadExample('green')">Green Family</button>
+                <button class="example-btn" onclick="loadExample('blue')">Blue Family</button>
+                <button class="example-btn" onclick="loadExample('yellow')">Yellow Family</button>
+                <button class="example-btn" onclick="loadExample('purple')">Purple Family</button>
+                <button class="example-btn" onclick="loadExample('cyan')">Cyan Family</button>
+                <button class="example-btn" onclick="loadExample('child')">Random Child</button>
+            </div>
+        </div>
+
+        <div class="output-grid">
+            <div class="preview-card">
+                <h2>SVG Preview (Static Image)</h2>
+                <div class="svg-container" id="svgPreview">
+                    <p style="color: #999;">Generate an SVG to preview it here</p>
+                </div>
+                <div class="metadata">
+                    <strong>SVG Source:</strong>
+                    <pre id="svgSource"></pre>
+                </div>
+            </div>
+
+            <div class="preview-card">
+                <h2>Metadata JSON</h2>
+                <div class="metadata" style="max-height: 600px;">
+                    <pre id="metadataOutput"></pre>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Family color mapping (same as contract)
+        const families = {
+            red: "#cc0000",
+            green: "#008800",
+            blue: "#0044cc",
+            yellow: "#cc9900",
+            purple: "#8800cc",
+            cyan: "#0088aa"
+        };
+
+        function getFamilyFromDNA(dnaHex) {
+            const dna = BigInt(dnaHex);
+            const familyBits = dna >> 17n;
+            const hash = Number(familyBits % 16777216n);
+            const familyKeys = Object.keys(families);
+            const familyName = familyKeys[hash % familyKeys.length];
+            return { name: familyName, color: families[familyName] };
+        }
+
+        function getBodyChar(charIndex) {
+            const chars = ["█", "▓", "▒", "░"];
+            return chars[charIndex];
+        }
+
+        function getEyeChar(charIndex) {
+            const chars = ["●", "◉", "◎", "○"];
+            return chars[charIndex];
+        }
+
+        function getAntennaTip(tipIndex) {
+            const tips = ["●", "◉", "○", "◎", "✦", "✧", "★"];
+            return tips[tipIndex % 7];
+        }
+
+        function generateSVG() {
+            const dnaHex = document.getElementById('dnaInput').value.trim();
+            const isKid = document.getElementById('isKidCheckbox').checked;
+
+            if (!dnaHex.startsWith('0x')) {
+                alert('DNA must start with 0x');
+                return;
+            }
+
+            const dna = BigInt(dnaHex);
+            const size = isKid ? 16 : 24;
+            const family = getFamilyFromDNA(dnaHex);
+
+            // Decode DNA
+            const bodyType = Number((dna >> 0n) & 7n) % 6;
+            const bodyChar = getBodyChar(Number((dna >> 3n) & 3n));
+            const eyeChar = getEyeChar(Number((dna >> 5n) & 3n));
+            const antennaTip = getAntennaTip(Number((dna >> 8n) & 7n));
+
+            const bodyWidth = isKid ? 3 : 6;
+            const bodyHeight = isKid ? 4 : 8;
+            const startY = isKid ? 6 : 7;
+
+            const charWidth = 12;
+            const charHeight = 20;
+            const width = size * charWidth;
+            const height = size * charHeight;
+            const cx = Math.floor(size / 2);
+
+            // Build SVG
+            let svgContent = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" style="background:#fff">`;
+            svgContent += `<style>text{font-family:"Courier New",monospace;font-size:16px;font-weight:400;fill:${family.color};dominant-baseline:text-before-edge;}</style>`;
+
+            // Render body
+            for (let y = 0; y < bodyHeight; y++) {
+                for (let i = 0; i < bodyWidth * 2 + 1; i++) {
+                    const x = cx - bodyWidth + i;
+                    svgContent += `<text x="${x * 12}" y="${(startY + y) * 20}">${bodyChar}</text>`;
+                }
+            }
+
+            // Add eyes
+            const eyeY = startY + 1;
+            const eyeSpacing = isKid ? 1 : 2;
+            svgContent += `<text x="${(cx - eyeSpacing) * 12}" y="${eyeY * 20}">${eyeChar}</text>`;
+            svgContent += `<text x="${(cx + eyeSpacing) * 12}" y="${eyeY * 20}">${eyeChar}</text>`;
+
+            // Add antenna
+            const antennaBaseY = startY - 1;
+            const antennaTipY = startY - 2;
+            svgContent += `<text x="${cx * 12}" y="${antennaBaseY * 20}">|</text>`;
+            svgContent += `<text x="${cx * 12}" y="${antennaTipY * 20}">${antennaTip}</text>`;
+
+            // Add arms
+            const armY = startY + 2;
+            const armOffset = bodyWidth + 1;
+            svgContent += `<text x="${(cx - armOffset) * 12}" y="${armY * 20}">-</text>`;
+            svgContent += `<text x="${(cx + armOffset) * 12}" y="${armY * 20}">-</text>`;
+
+            // Add legs
+            const legY = startY + bodyHeight;
+            const legSpacing = isKid ? 1 : 2;
+            svgContent += `<text x="${(cx - legSpacing) * 12}" y="${legY * 20}">|</text>`;
+            svgContent += `<text x="${(cx + legSpacing) * 12}" y="${legY * 20}">|</text>`;
+
+            svgContent += '</svg>';
+
+            // Display SVG
+            document.getElementById('svgPreview').innerHTML = svgContent;
+            document.getElementById('svgSource').textContent = svgContent;
+
+            // Generate metadata
+            const metadata = {
+                name: `Protocolite #1${isKid ? ' (Child)' : ' (Spreader)'}`,
+                description: "Fully on-chain generative ASCII art with DOM-based rendering and per-character animations.",
+                image: `data:image/svg+xml;base64,${btoa(svgContent)}`,
+                animation_url: "data:text/html;base64,...(animated HTML version)",
+                attributes: [
+                    { trait_type: "Type", value: isKid ? "Child" : "Spreader" },
+                    { trait_type: "Size", value: `${size}x${size}` },
+                    { trait_type: "DNA", value: dnaHex },
+                    { trait_type: "Family", value: family.name },
+                    { trait_type: "Family Color", value: family.color }
+                ]
+            };
+
+            document.getElementById('metadataOutput').textContent = JSON.stringify(metadata, null, 2);
+        }
+
+        function loadExample(type) {
+            const examples = {
+                red: { dna: '0x0000000000000000000000000000000000000000000000000000000000000045', isKid: false },
+                green: { dna: '0x0000000000000000000000000000000000000000000000000000000000020093', isKid: false },
+                blue: { dna: '0x00000000000000000000000000000000000000000000000000000000000400d7', isKid: false },
+                yellow: { dna: '0x000000000000000000000000000000000000000000000000000000000006012f', isKid: false },
+                purple: { dna: '0x0000000000000000000000000000000000000000000000000000000000080165', isKid: false },
+                cyan: { dna: '0x000000000000000000000000000000000000000000000000000000000a0189ab', isKid: false },
+                child: { dna: '0x123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef', isKid: true }
+            };
+
+            const example = examples[type];
+            document.getElementById('dnaInput').value = example.dna;
+            document.getElementById('isKidCheckbox').checked = example.isKid;
+            generateSVG();
+        }
+
+        // Generate initial example on load
+        window.addEventListener('load', () => {
+            loadExample('blue');
+        });
+    </script>
+</body>
+</html>

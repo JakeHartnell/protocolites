@@ -3,7 +3,7 @@ pragma solidity ^0.8.13;
 
 import {Script, console} from "forge-std/Script.sol";
 import {ProtocolitesMaster} from "../src/ProtocolitesMaster.sol";
-import {ProtocolitesRendererAnimated} from "../src/ProtocolitesRendererAnimated.sol";
+import {ProtocolitesRendererSVG} from "../src/ProtocolitesRendererSVG.sol";
 import {ProtocoliteFactory} from "../src/ProtocoliteFactory.sol";
 
 /**
@@ -13,7 +13,7 @@ import {ProtocoliteFactory} from "../src/ProtocoliteFactory.sol";
  * @dev This script deploys all contracts and properly connects them with correct ownership
  *
  *      Deployment order:
- *      1. ProtocolitesRendererAnimated (Animated canvas-based renderer)
+ *      1. ProtocolitesRendererSVG (Animated canvas-based renderer)
  *      2. ProtocoliteFactory (infection contract deployer)
  *      3. ProtocolitesMaster (main NFT contract)
  *      4. Connect all contracts with proper ownership
@@ -38,7 +38,7 @@ contract DeployFreshAnimatedScript is Script {
 
         // Step 1: Deploy Animated renderer
         // This contract generates on-chain ASCII art with advanced canvas animations and temperament system
-        ProtocolitesRendererAnimated renderer = new ProtocolitesRendererAnimated();
+        ProtocolitesRendererSVG renderer = new ProtocolitesRendererSVG();
         console.log("[OK] Animated Renderer deployed at:", address(renderer));
 
         // Step 2: Deploy factory
