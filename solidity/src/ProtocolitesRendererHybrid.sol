@@ -4,40 +4,82 @@ pragma solidity ^0.8.13;
 import "solady/utils/Base64.sol";
 import "solady/utils/LibString.sol";
 import "solady/auth/Ownable.sol";
+import "solady/utils/SSTORE2.sol";
 
 import "./interfaces/IProtocolitesRenderer.sol";
 
-/// @title ProtocolitesRendererSVG
-/// @notice Fully static SVG renderer with CSS animations - no JavaScript required
-/// @dev All animations are done via CSS keyframes, matching the original JS animation aesthetics
-contract ProtocolitesRendererSVG is Ownable, IProtocolitesRenderer {
-    string private constant DEPRECATED_SCRIPT = ""; // V4 uses pure CSS animations, no JS
+/// @title ProtocolitesRendererHybrid
+/// @notice Hybrid renderer with static SVG and optional JavaScript animations
+/// @dev Supports both static SVG images and animated HTML with JavaScript
+contract ProtocolitesRendererHybrid is Ownable, IProtocolitesRenderer {
+    address private renderScriptPointer;
 
     constructor() {
         _initializeOwner(msg.sender);
     }
 
-    /// @notice Deprecated - V4 uses pure CSS animations
-    function renderScript() external pure returns (string memory) {
-        return DEPRECATED_SCRIPT;
+    function setRenderScript(string memory _script) external onlyOwner {
+        renderScriptPointer = SSTORE2.write(bytes(_script));
     }
 
-    /// @notice Deprecated - V4 uses pure CSS animations
-    function setRenderScript(string memory) external pure {
-        revert("V4 uses pure CSS animations - no script needed");
+    function renderScript() public view returns (string memory) {
+        if (renderScriptPointer == address(0)) return "";
+        return string(SSTORE2.read(renderScriptPointer));
     }
 
-    function tokenURI(uint256 tokenId, TokenData memory data) external pure returns (string memory) {
+    function tokenURI(uint256 tokenId, TokenData memory data) external view returns (string memory) {
         return string.concat("data:application/json;base64,", Base64.encode(bytes(metadata(tokenId, data))));
     }
 
-    function metadata(uint256 tokenId, TokenData memory data) public pure returns (string memory) {
+    function metadata(uint256 tokenId, TokenData memory data) public view returns (string memory) {
         bool isKid = data.isKid;
         uint256 size = isKid ? 16 : 24;
 
-        // Generate static SVG with CSS animations
+        // Generate static SVG
         string memory svg = generateSVG(tokenId, data);
         string memory imageData = string.concat("data:image/svg+xml;base64,", Base64.encode(bytes(svg)));
+
+        // Generate animated HTML page if script is available
+        string memory animationUrl = "";
+        if (renderScriptPointer != address(0)) {
+            string memory animation = string.concat(
+                '<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0">',
+                "<title>Protocolite #",
+                LibString.toString(tokenId),
+                "</title>",
+                '<style>@import url("https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@100;200;300;400&display=swap");',
+                "*{margin:0;padding:0;box-sizing:border-box;}",
+                "html,body{width:100%;height:100%;margin:0;padding:0;min-width:600px;min-height:600px;}",
+                'body{font-family:"JetBrains Mono","Courier New",monospace;background:#fff;color:#000;line-height:1;font-size:12px;font-weight:200;display:flex;align-items:center;justify-content:center;overflow:hidden;}',
+                ".container{text-align:center;padding:",
+                isKid ? "20" : "30",
+                "px;position:relative;}",
+                ".creature-container{position:relative;display:inline-block;font-family:'Courier New',monospace;line-height:1;-webkit-font-smoothing:none;-moz-osx-font-smoothing:unset;font-smooth:never;text-rendering:optimizeSpeed;}",
+                ".creature-char{position:absolute;font-family:'Courier New',monospace;white-space:pre;user-select:none;pointer-events:none;will-change:transform;}",
+                "</style></head><body>",
+                '<div class="container"><div class="creature-container" id="creature"></div></div>',
+                "<script>",
+                "const tokenId=",
+                LibString.toString(tokenId),
+                ";",
+                'const dna="',
+                LibString.toHexString(data.dna),
+                '";',
+                "const isKid=",
+                isKid ? "true" : "false",
+                ";",
+                'const parentDna="',
+                LibString.toHexString(data.parentDna),
+                '";',
+                "const size=",
+                LibString.toString(size),
+                ";",
+                renderScript(),
+                "</script>",
+                "</body></html>"
+            );
+            animationUrl = string.concat('"animation_url":"data:text/html;base64,', Base64.encode(bytes(animation)), '",');
+        }
 
         string memory attributes = string.concat(
             '[{"trait_type":"Type","value":"',
@@ -65,10 +107,11 @@ contract ProtocolitesRendererSVG is Ownable, IProtocolitesRenderer {
             LibString.toString(tokenId),
             isKid ? " (Child)" : " (Spreader)",
             '",',
-            '"description":"Fully on-chain generative ASCII art with pure CSS animations.",',
+            '"description":"Fully on-chain generative ASCII art with hybrid SVG/JS rendering.",',
             '"image":"',
             imageData,
             '",',
+            animationUrl,
             '"attributes":',
             attributes,
             "}"
@@ -130,111 +173,16 @@ contract ProtocolitesRendererSVG is Ownable, IProtocolitesRenderer {
         );
     }
 
-    /// @notice Build CSS animations based on temperament
+    /// @notice Build CSS styles (animations removed)
     function buildAnimations(uint256 tempIndex, string memory color, uint256 fontSize) private pure returns (string memory) {
-        // Base styles
-        string memory baseStyle = string.concat(
+        // Base styles only - no animations
+        return string.concat(
             "text{font-family:'Courier New',monospace;font-size:",
             LibString.toString(fontSize),
             "px;font-weight:400;fill:",
             color,
             ";dominant-baseline:text-before-edge}"
         );
-
-        string memory bodyAnim;
-        string memory eyeAnim;
-        string memory armAnim;
-        string memory legAnim;
-        string memory antennaAnim;
-        string memory mouthAnim;
-
-        if (tempIndex == 0) {
-            // Calm (speed: 1.5)
-            bodyAnim =
-                ".body{animation:b0 2.67s ease-in-out infinite}@keyframes b0{0%,100%{transform:translateY(0)}50%{transform:translateY(2px)}}";
-            eyeAnim =
-                ".eye{animation:e0 4s ease-in-out infinite}@keyframes e0{0%,95%,100%{opacity:1}96%,99%{opacity:.2}}";
-            armAnim =
-                ".arm{animation:a0 2s ease-in-out infinite}@keyframes a0{0%,100%{transform:translateY(0)}50%{transform:translateY(3px)}}";
-            legAnim =
-                ".leg{animation:l0 1.33s ease-in-out infinite}@keyframes l0{0%,100%{transform:translateY(0)}50%{transform:translateY(2px)}}";
-            antennaAnim =
-                ".antenna{animation:n0 2.67s ease-in-out infinite}@keyframes n0{0%,100%{transform:translateX(0)}50%{transform:translateX(2px)}}"
-                ".antenna-tip{animation:t0 3.13s ease-in-out infinite}@keyframes t0{0%,100%{transform:translateX(0)rotate(0)}50%{transform:translateX(2px)rotate(17.19deg)}}";
-            mouthAnim = "";
-        } else if (tempIndex == 1) {
-            // Balanced (speed: 2.5)
-            bodyAnim =
-                ".body{animation:b1 1.6s ease-in-out infinite}@keyframes b1{0%,100%{transform:translateY(0)}50%{transform:translateY(2px)}}";
-            eyeAnim =
-                ".eye{animation:e1 4s ease-in-out infinite}@keyframes e1{0%,94%,100%{opacity:1}95%,98%{opacity:.2}}";
-            armAnim =
-                ".arm{animation:a1 1.2s ease-in-out infinite}@keyframes a1{0%,100%{transform:translate(0,0)}50%{transform:translate(1px,3px)}}";
-            legAnim =
-                ".leg{animation:l1 0.8s ease-in-out infinite}@keyframes l1{0%,100%{transform:translateY(0)}50%{transform:translateY(2px)}}";
-            antennaAnim =
-                ".antenna{animation:n1 1.6s ease-in-out infinite}@keyframes n1{0%,100%{transform:translateX(0)}50%{transform:translateX(2px)}}"
-                ".antenna-tip{animation:t1 1.88s ease-in-out infinite}@keyframes t1{0%,100%{transform:translateX(0)rotate(0)}50%{transform:translateX(2px)rotate(17.19deg)}}";
-            mouthAnim = "";
-        } else if (tempIndex == 2) {
-            // Energetic (speed: 3.5)
-            bodyAnim =
-                ".body{animation:b2 1.14s ease-in-out infinite}@keyframes b2{0%,100%{transform:translateY(0)}50%{transform:translateY(2px)}}";
-            eyeAnim =
-                ".eye{animation:e2 4s ease-in-out infinite}@keyframes e2{0%,92%,100%{opacity:1}93%,97%{opacity:.2}}";
-            armAnim =
-                ".arm{animation:a2 0.86s ease-in-out infinite}@keyframes a2{0%,100%{transform:translate(0,0)}25%{transform:translate(2px,3px)}75%{transform:translate(-1px,2px)}}";
-            legAnim =
-                ".leg{animation:l2 0.57s ease-in-out infinite}@keyframes l2{0%,100%{transform:translateY(0)}50%{transform:translateY(2px)}}";
-            antennaAnim =
-                ".antenna{animation:n2 1.14s ease-in-out infinite}@keyframes n2{0%,100%{transform:translateX(0)}50%{transform:translateX(2px)}}"
-                ".antenna-tip{animation:t2 1.34s ease-in-out infinite}@keyframes t2{0%,100%{transform:translateX(0)rotate(0)}50%{transform:translateX(2px)rotate(17.19deg)}}";
-            mouthAnim = "";
-        } else if (tempIndex == 3) {
-            // Chaotic (speed: 5.0)
-            bodyAnim =
-                ".body{animation:b3 0.8s ease-in-out infinite}@keyframes b3{0%,100%{transform:translateY(0)}25%{transform:translateY(3px)}75%{transform:translateY(-1px)}}";
-            eyeAnim =
-                ".eye{animation:e3 4s ease-in-out infinite}@keyframes e3{0%,90%,100%{opacity:1}91%,96%{opacity:.2}}";
-            armAnim =
-                ".arm{animation:a3 0.6s ease-in-out infinite}@keyframes a3{0%,100%{transform:translate(0,0)}25%{transform:translate(2px,4px)}50%{transform:translate(-2px,2px)}75%{transform:translate(1px,-1px)}}";
-            legAnim =
-                ".leg{animation:l3 0.4s ease-in-out infinite}@keyframes l3{0%,100%{transform:translateY(0)}33%{transform:translateY(3px)}66%{transform:translateY(-1px)}}";
-            antennaAnim =
-                ".antenna{animation:n3 0.8s ease-in-out infinite}@keyframes n3{0%,100%{transform:translateX(0)}33%{transform:translateX(2px)}66%{transform:translateX(-2px)}}"
-                ".antenna-tip{animation:t3 0.94s ease-in-out infinite}@keyframes t3{0%,100%{transform:translateX(0)rotate(0)}33%{transform:translateX(2px)rotate(25.78deg)}66%{transform:translateX(-2px)rotate(-25.78deg)}}";
-            mouthAnim = "";
-        } else if (tempIndex == 4) {
-            // Glitchy (speed: 6.0)
-            bodyAnim =
-                ".body{animation:b4 0.67s ease-in-out infinite}@keyframes b4{0%,100%{transform:translateY(0)}20%{transform:translateY(2px)}40%{transform:translateY(-1px)}60%{transform:translateY(3px)}80%{transform:translateY(1px)}}";
-            eyeAnim =
-                ".eye{animation:e4 4s steps(4)infinite}@keyframes e4{0%,85%,100%{opacity:1}86%,92%{opacity:.2}93%,97%{opacity:1}}";
-            armAnim =
-                ".arm{animation:a4 0.5s ease-in-out infinite}@keyframes a4{0%,100%{transform:translate(0,0)}20%{transform:translate(2px,3px)}40%{transform:translate(-2px,4px)}60%{transform:translate(1px,-1px)}80%{transform:translate(-1px,2px)}}";
-            legAnim =
-                ".leg{animation:l4 0.33s ease-in-out infinite}@keyframes l4{0%,100%{transform:translateY(0)}25%{transform:translateY(2px)}50%{transform:translateY(-1px)}75%{transform:translateY(3px)}}";
-            antennaAnim =
-                ".antenna{animation:n4 0.67s ease-in-out infinite}@keyframes n4{0%,100%{transform:translate(0,0)}25%{transform:translate(2px,1px)}50%{transform:translate(-2px,-1px)}75%{transform:translate(1px,1px)}}"
-                ".antenna-tip{animation:t4 0.78s ease-in-out infinite}@keyframes t4{0%,100%{transform:translate(0,0)rotate(0)}25%{transform:translate(2px,1px)rotate(34.38deg)}50%{transform:translate(-2px,-1px)rotate(-34.38deg)}75%{transform:translate(1px,1px)rotate(17.19deg)}}";
-            mouthAnim = "";
-        } else {
-            // Unstable (speed: 7.0)
-            bodyAnim =
-                ".body{animation:b5 0.57s linear infinite}@keyframes b5{0%{transform:translateY(0)}15%{transform:translateY(3px)}30%{transform:translateY(-2px)}45%{transform:translateY(4px)}60%{transform:translateY(-1px)}75%{transform:translateY(2px)}90%{transform:translateY(-3px)}100%{transform:translateY(0)}}";
-            eyeAnim =
-                ".eye{animation:e5 4s steps(5)infinite}@keyframes e5{0%,80%,100%{opacity:1}81%,85%{opacity:.1}86%,90%{opacity:1}91%,95%{opacity:.3}}";
-            armAnim =
-                ".arm{animation:a5 0.43s linear infinite}@keyframes a5{0%{transform:translate(0,0)}14%{transform:translate(3px,4px)}28%{transform:translate(-3px,2px)}42%{transform:translate(2px,-2px)}57%{transform:translate(-2px,5px)}71%{transform:translate(1px,-3px)}85%{transform:translate(-1px,3px)}100%{transform:translate(0,0)}}";
-            legAnim =
-                ".leg{animation:l5 0.29s linear infinite}@keyframes l5{0%{transform:translateY(0)}20%{transform:translateY(3px)}40%{transform:translateY(-2px)}60%{transform:translateY(4px)}80%{transform:translateY(-1px)}100%{transform:translateY(0)}}";
-            antennaAnim =
-                ".antenna{animation:n5 0.57s linear infinite}@keyframes n5{0%{transform:translate(0,0)}16%{transform:translate(3px,1px)}33%{transform:translate(-3px,-1px)}50%{transform:translate(2px,2px)}66%{transform:translate(-2px,-2px)}83%{transform:translate(1px,1px)}100%{transform:translate(0,0)}}"
-                ".antenna-tip{animation:t5 0.67s linear infinite}@keyframes t5{0%{transform:translate(0,0)rotate(0)}16%{transform:translate(3px,1px)rotate(51.56deg)}33%{transform:translate(-3px,-1px)rotate(-51.56deg)}50%{transform:translate(2px,2px)rotate(34.38deg)}66%{transform:translate(-2px,-2px)rotate(-34.38deg)}83%{transform:translate(1px,1px)rotate(17.19deg)}100%{transform:translate(0,0)rotate(0)}}";
-            mouthAnim = "";
-        }
-
-        return string.concat(baseStyle, bodyAnim, eyeAnim, armAnim, legAnim, antennaAnim, mouthAnim);
     }
 
     /// @notice Get temperament index from seed (weighted probability)

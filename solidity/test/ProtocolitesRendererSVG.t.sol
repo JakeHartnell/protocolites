@@ -2,14 +2,14 @@
 pragma solidity ^0.8.13;
 
 import "forge-std/Test.sol";
-import "../src/ProtocolitesRendererV3.sol";
+import "../src/ProtocolitesRendererSVG.sol";
 import "../src/interfaces/IProtocolitesRenderer.sol";
 
 contract ProtocolitesRendererV3Test is Test {
-    ProtocolitesRendererV3 public renderer;
+    ProtocolitesRendererSVG public renderer;
 
     function setUp() public {
-        renderer = new ProtocolitesRendererV3();
+        renderer = new ProtocolitesRendererSVG();
     }
 
     function testGenerateSVGForSpreader() public {
