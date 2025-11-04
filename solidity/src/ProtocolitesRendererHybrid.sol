@@ -5,14 +5,24 @@ import "solady/utils/Base64.sol";
 import "solady/utils/LibString.sol";
 import "solady/auth/Ownable.sol";
 import "solady/utils/SSTORE2.sol";
+import "solady/utils/FixedPointMathLib.sol";
+import "solady/utils/SafeCastLib.sol";
 
 import "./interfaces/IProtocolitesRenderer.sol";
 
 /// @title ProtocolitesRendererHybrid
 /// @notice Hybrid renderer with static SVG and optional JavaScript animations
-/// @dev Supports both static SVG images and animated HTML with JavaScript
+/// @dev Supports both static SVG images and animated HTML with JavaScript, uses Solady math libraries
 contract ProtocolitesRendererHybrid is Ownable, IProtocolitesRenderer {
+    using FixedPointMathLib for uint256;
+    using FixedPointMathLib for int256;
+    using SafeCastLib for uint256;
+    using SafeCastLib for int256;
+
     address private renderScriptPointer;
+
+    /// @dev Scale factor for fixed-point math (matches JS decimal precision)
+    int256 private constant SCALE = 1000;
 
     constructor() {
         _initializeOwner(msg.sender);
@@ -182,13 +192,13 @@ contract ProtocolitesRendererHybrid is Ownable, IProtocolitesRenderer {
         int256 h = 0;
         for (uint256 i = 0; i < dnaBytes.length; i++) {
             unchecked {
-                h = ((h << 5) - h) + int256(uint256(uint8(dnaBytes[i])));
+                h = ((h << 5) - h) + uint256(uint8(dnaBytes[i])).toInt256();
                 h = h & h; // Bitwise AND with itself (no-op but matches JS)
             }
         }
 
         // Return absolute value
-        return uint256(h < 0 ? -h : h);
+        return (h < 0 ? -h : h).toUint256();
     }
 
     /// @notice Build CSS styles (animations removed)
@@ -251,6 +261,82 @@ contract ProtocolitesRendererHybrid is Ownable, IProtocolitesRenderer {
         return unicode"★"; // U+2605 Black Star
     }
 
+    /// @notice Grid cell structure for grid-based rendering
+    /// @dev Matches renderer-v3.js grid approach: { char: string, type: string }
+    struct GridCell {
+        string char;
+        string cellType; // "empty", "body", "eye", "mouth", "cigarette", "arm", "leg", "antenna", "antenna-tip", "hat"
+    }
+
+    /// @notice Initialize empty grid
+    /// @param size Grid size (16 for kids, 24 for adults)
+    /// @return grid 2D array of GridCell initialized to empty spaces
+    function _initializeGrid(uint256 size) private pure returns (GridCell[][] memory grid) {
+        grid = new GridCell[][](size);
+        for (uint256 i = 0; i < size; i++) {
+            grid[i] = new GridCell[](size);
+            for (uint256 j = 0; j < size; j++) {
+                grid[i][j] = GridCell(" ", "empty");
+            }
+        }
+    }
+
+    /// @notice Check if grid cell contains body character
+    /// @param cell Grid cell to check
+    /// @return true if cell type is "body"
+    function _isBodyCell(GridCell memory cell) private pure returns (bool) {
+        return keccak256(bytes(cell.cellType)) == keccak256(bytes("body"));
+    }
+
+    /// @notice Check if grid cell is empty
+    /// @param cell Grid cell to check
+    /// @return true if cell type is "empty"
+    function _isEmptyCell(GridCell memory cell) private pure returns (bool) {
+        return keccak256(bytes(cell.cellType)) == keccak256(bytes("empty"));
+    }
+
+    /// @notice Set grid cell with bounds checking
+    /// @param grid The grid to modify
+    /// @param x X coordinate
+    /// @param y Y coordinate
+    /// @param char Character to set
+    /// @param cellType Type of cell
+    /// @param size Grid size for bounds checking
+    function _setGridCell(GridCell[][] memory grid, uint256 x, uint256 y, string memory char, string memory cellType, uint256 size)
+        private
+        pure
+    {
+        if (x < size && y < size) {
+            grid[y][x] = GridCell(char, cellType);
+        }
+    }
+
+    /// @notice Convert grid to SVG text elements
+    /// @param grid The grid to convert
+    /// @param size Grid size
+    /// @param charWidth Character width in pixels
+    /// @param charHeight Character height in pixels
+    /// @param xOffset X offset for positioning
+    /// @return SVG text elements as concatenated string
+    function _gridToSVG(GridCell[][] memory grid, uint256 size, uint256 charWidth, uint256 charHeight, uint256 xOffset)
+        private
+        pure
+        returns (string memory)
+    {
+        string memory result = "";
+        for (uint256 y = 0; y < size; y++) {
+            for (uint256 x = 0; x < size; x++) {
+                if (!_isEmptyCell(grid[y][x])) {
+                    result = string.concat(
+                        result,
+                        _renderTextWithClass(x, y, grid[y][x].char, grid[y][x].cellType, charWidth, charHeight, xOffset)
+                    );
+                }
+            }
+        }
+        return result;
+    }
+
     function renderAnimatedCreature(uint256 dna, bool isKid, uint256 seed, uint256 charWidth, uint256 charHeight, uint256 xOffset)
         private
         pure
@@ -275,280 +361,243 @@ contract ProtocolitesRendererHybrid is Ownable, IProtocolitesRenderer {
         uint256 bodyHeight = size == 24 ? 8 : 4;
         uint256 bodyStartY = size == 24 ? 7 : 6;
 
-        string memory result = "";
+        // Initialize grid (matching renderer-v3.js grid-based approach)
+        GridCell[][] memory grid = _initializeGrid(size);
 
-        // Track body positions for arms/legs/antennas
-        // We'll use a dynamic array approach: store packed position data
-        // Format: array of uint256 where each element stores (y << 128) | x
-        uint256[] memory bodyPositions = new uint256[](size * size);
-        uint256 bodyPosCount = 0;
-
-        // Render body and track positions
+        // Render body to grid (matching renderer-v3.js exactly)
         for (uint256 y = 0; y < bodyHeight; y++) {
-            for (int256 x = -int256(bodyWidth); x <= int256(bodyWidth); x++) {
+            for (int256 x = -bodyWidth.toInt256(); x <= bodyWidth.toInt256(); x++) {
                 uint256 posY = bodyStartY + y;
-                int256 posX = int256(cx) + x;
-                if (posX < 0 || posX >= int256(size)) continue;
+                int256 posX = cx.toInt256() + x;
+                if (posX < 0 || posX >= size.toInt256()) continue;
 
-                bool inBody = false;
-                int256 relX = (x * 1000) / int256(bodyWidth);
-                int256 relY = ((int256(y) - int256(bodyHeight) / 2) * 1000) / (int256(bodyHeight) / 2);
+                // Calculate normalized coordinates: relX and relY in range [-1.0, 1.0] scaled by 1000
+                // JS: relX = x / bodyWidth, relY = (y - bodyHeight/2) / (bodyHeight/2)
+                int256 relX = _mulDiv(x, SCALE, bodyWidth.toInt256());
+                int256 halfHeight = bodyHeight.toInt256() / 2;
+                int256 relY = _mulDiv(y.toInt256() - halfHeight, SCALE, halfHeight);
 
-                if (bodyType == 0) {
-                    inBody = true;
-                } else if (bodyType == 1) {
-                    int256 dist = (relX * relX + relY * relY) / 1000;
-                    inBody = dist <= 1000;
-                } else if (bodyType == 2) {
-                    int256 absX = relX < 0 ? -relX : relX;
-                    int256 absY = relY < 0 ? -relY : relY;
-                    inBody = (absX + absY) <= 1000;
-                } else if (bodyType == 3) {
-                    if (isKid) {
-                        if (relY < -200) {
-                            inBody = true;
-                        } else {
-                            int256 absX = relX < 0 ? -relX : relX;
-                            inBody = absX <= 700;
-                        }
-                    } else {
-                        if (relY < 0) {
-                            inBody = true;
-                        } else {
-                            int256 absX = relX < 0 ? -relX : relX;
-                            inBody = absX <= 600;
-                        }
-                    }
-                } else if (bodyType == 4) {
-                    int256 absX = relX < 0 ? -relX : relX;
-                    if (relY < -300) inBody = absX <= 700;
-                    else if (relY < 300) inBody = true;
-                    else inBody = absX <= 850;
-                } else if (bodyType == 5) {
-                    int256 dist = (relX * relX + relY * relY) / 1000;
-                    if (relY < 500) {
-                        inBody = dist <= 1000;
-                    } else {
-                        int256 absX = relX < 0 ? -relX : relX;
-                        // Calculate column index safely: x ranges from -bodyWidth to +bodyWidth
-                        // To get 0-indexed column: add bodyWidth to shift range to 0..2*bodyWidth
-                        uint256 columnIndex = uint256(int256(bodyWidth) + x);
-                        bool oddColumn = (columnIndex % 2) == 0;
-                        inBody = absX <= 900 && (oddColumn || relY < 800);
-                    }
-                }
+                bool inBody = _isInBody(bodyType, relX, relY, isKid, x, bodyWidth);
 
                 if (inBody) {
-                    result = string.concat(
-                        result, _renderTextWithClass(uint256(posX), posY, bodyChar, "body", charWidth, charHeight, xOffset)
-                    );
-                    // Track body position: pack y and x into single uint256
-                    bodyPositions[bodyPosCount] = (posY << 128) | uint256(posX);
-                    bodyPosCount++;
+                    grid[posY][posX.toUint256()] = GridCell(bodyChar, "body");
                 }
             }
         }
 
-        // Eyes (with surrounding body structure like JS renderer)
+        // Eyes with proper grid clearing (matching renderer-v3.js lines 140-230)
         uint256 eyeY = bodyStartY + 1;
         seed = _random(seed);
         uint256 eyeCount = 1 + (seed % 3);
 
         if (isKid) {
-            if (eyeCount == 1 && cx >= 1) {
-                // Create eye socket: clear 3x2 area and rebuild with eye and surrounding body
-                result = string.concat(
-                    result,
-                    _renderTextWithClass(cx - 1, eyeY, bodyChar, "body", charWidth, charHeight, xOffset),
-                    _renderTextWithClass(cx, eyeY, eyeChar, "eye", charWidth, charHeight, xOffset),
-                    _renderTextWithClass(cx + 1, eyeY, bodyChar, "body", charWidth, charHeight, xOffset),
-                    _renderTextWithClass(cx, eyeY + 1, bodyChar, "body", charWidth, charHeight, xOffset)
-                );
-            } else if (eyeCount == 2 && cx >= 2) {
+            if (eyeCount == 1) {
+                // Clear 3x2 area for single eye socket
+                for (uint256 dy = 0; dy < 2; dy++) {
+                    for (int256 dx = -1; dx <= 1; dx++) {
+                        int256 eyeX = int256(cx) + dx;
+                        if (eyeX >= 0 && eyeX < int256(size) && eyeY + dy < size) {
+                            if (_isBodyCell(grid[eyeY + dy][uint256(eyeX)])) {
+                                grid[eyeY + dy][uint256(eyeX)] = GridCell(" ", "empty");
+                            }
+                        }
+                    }
+                }
+                // Rebuild eye socket structure
+                if (cx >= 1 && cx + 1 < size) {
+                    grid[eyeY][cx - 1] = GridCell(bodyChar, "body");
+                    grid[eyeY][cx] = GridCell(eyeChar, "eye");
+                    grid[eyeY][cx + 1] = GridCell(bodyChar, "body");
+                    grid[eyeY + 1][cx] = GridCell(bodyChar, "body");
+                }
+            } else if (eyeCount == 2) {
                 uint256 eyeSpacing = 1;
-                // Create two eye sockets (needs cx >= 2 for cx - eyeSpacing - 1 = cx - 2)
-                result = string.concat(
-                    result,
-                    // Left eye socket
-                    _renderTextWithClass(cx - eyeSpacing - 1, eyeY, bodyChar, "body", charWidth, charHeight, xOffset),
-                    _renderTextWithClass(cx - eyeSpacing, eyeY, eyeChar, "eye", charWidth, charHeight, xOffset),
-                    _renderTextWithClass(cx - eyeSpacing - 1, eyeY + 1, bodyChar, "body", charWidth, charHeight, xOffset),
-                    _renderTextWithClass(cx - eyeSpacing, eyeY + 1, bodyChar, "body", charWidth, charHeight, xOffset),
-                    // Right eye socket
-                    _renderTextWithClass(cx + eyeSpacing, eyeY, eyeChar, "eye", charWidth, charHeight, xOffset),
-                    _renderTextWithClass(cx + eyeSpacing + 1, eyeY, bodyChar, "body", charWidth, charHeight, xOffset),
-                    _renderTextWithClass(cx + eyeSpacing, eyeY + 1, bodyChar, "body", charWidth, charHeight, xOffset),
-                    _renderTextWithClass(cx + eyeSpacing + 1, eyeY + 1, bodyChar, "body", charWidth, charHeight, xOffset)
-                );
-            } else if (cx >= 2) {
-                // 3 eyes - no socket structure in JS
-                result = string.concat(
-                    result,
-                    _renderTextWithClass(cx - 2, eyeY, eyeChar, "eye", charWidth, charHeight, xOffset),
-                    _renderTextWithClass(cx, eyeY, eyeChar, "eye", charWidth, charHeight, xOffset),
-                    _renderTextWithClass(cx + 2, eyeY, eyeChar, "eye", charWidth, charHeight, xOffset)
-                );
+                // Clear 2x2 areas for both eyes
+                for (uint256 dy = 0; dy < 2; dy++) {
+                    for (uint256 dx = 0; dx < 2; dx++) {
+                        // Left eye area
+                        if (cx >= eyeSpacing + 1 && cx - eyeSpacing - 1 + dx < size && eyeY + dy < size) {
+                            if (_isBodyCell(grid[eyeY + dy][cx - eyeSpacing - 1 + dx])) {
+                                grid[eyeY + dy][cx - eyeSpacing - 1 + dx] = GridCell(" ", "empty");
+                            }
+                        }
+                        // Right eye area
+                        if (cx + eyeSpacing + dx < size && eyeY + dy < size) {
+                            if (_isBodyCell(grid[eyeY + dy][cx + eyeSpacing + dx])) {
+                                grid[eyeY + dy][cx + eyeSpacing + dx] = GridCell(" ", "empty");
+                            }
+                        }
+                    }
+                }
+                // Rebuild left eye socket
+                if (cx >= eyeSpacing + 1) {
+                    grid[eyeY][cx - eyeSpacing - 1] = GridCell(bodyChar, "body");
+                    grid[eyeY][cx - eyeSpacing] = GridCell(eyeChar, "eye");
+                    grid[eyeY + 1][cx - eyeSpacing - 1] = GridCell(bodyChar, "body");
+                    grid[eyeY + 1][cx - eyeSpacing] = GridCell(bodyChar, "body");
+                }
+                // Rebuild right eye socket
+                if (cx + eyeSpacing + 1 < size) {
+                    grid[eyeY][cx + eyeSpacing] = GridCell(eyeChar, "eye");
+                    grid[eyeY][cx + eyeSpacing + 1] = GridCell(bodyChar, "body");
+                    grid[eyeY + 1][cx + eyeSpacing] = GridCell(bodyChar, "body");
+                    grid[eyeY + 1][cx + eyeSpacing + 1] = GridCell(bodyChar, "body");
+                }
+            } else {
+                // 3 eyes - clear and place (renderer-v3.js lines 176-180)
+                for (int256 dx = -2; dx <= 2; dx += 2) {
+                    int256 eyeX = int256(cx) + dx;
+                    if (eyeX >= 0 && eyeX < int256(size) && eyeY < size) {
+                        uint256 eyeXu = uint256(eyeX);
+                        if (_isBodyCell(grid[eyeY][eyeXu])) {
+                            grid[eyeY][eyeXu] = GridCell(" ", "empty");
+                        }
+                        grid[eyeY][eyeXu] = GridCell(eyeChar, "eye");
+                    }
+                }
             }
         } else {
             // Adult eyes
             seed = _random(seed);
             uint256 adultEyeCount = 1 + (seed % 3);
 
-            if (adultEyeCount == 1 && cx >= 2) {
-                // Mega eye: 5x3 block
-                for (uint256 dx = 0; dx < 5; dx++) {
-                    uint256 eyeX = cx - 2 + dx;
-                    result = string.concat(
-                        result,
-                        _renderTextWithClass(eyeX, eyeY, bodyChar, "body", charWidth, charHeight, xOffset),
-                        _renderTextWithClass(eyeX, eyeY + 2, bodyChar, "body", charWidth, charHeight, xOffset)
-                    );
+            if (adultEyeCount == 1) {
+                // Mega eye: clear 5x3 area, rebuild structure (renderer-v3.js lines 184-199)
+                for (uint256 dy = 0; dy < 3; dy++) {
+                    for (int256 dx = -2; dx <= 2; dx++) {
+                        int256 eyeX = int256(cx) + dx;
+                        if (eyeX >= 0 && eyeX < int256(size) && eyeY + dy < size) {
+                            uint256 eyeXu = uint256(eyeX);
+                            if (_isBodyCell(grid[eyeY + dy][eyeXu])) {
+                                grid[eyeY + dy][eyeXu] = GridCell(" ", "empty");
+                            }
+                        }
+                    }
                 }
-                result = string.concat(
-                    result,
-                    _renderTextWithClass(cx - 2, eyeY + 1, bodyChar, "body", charWidth, charHeight, xOffset),
-                    _renderTextWithClass(cx - 1, eyeY + 1, eyeChar, "eye", charWidth, charHeight, xOffset),
-                    _renderTextWithClass(cx, eyeY + 1, eyeChar, "eye", charWidth, charHeight, xOffset),
-                    _renderTextWithClass(cx + 1, eyeY + 1, eyeChar, "eye", charWidth, charHeight, xOffset),
-                    _renderTextWithClass(cx + 2, eyeY + 1, bodyChar, "body", charWidth, charHeight, xOffset)
-                );
-            } else if (adultEyeCount == 2 && cx >= 4) {
-                // Two eye sockets: 3x3 blocks (need cx >= 4 to fit left socket: cx - blockSpacing - 2 = cx - 4)
+                // Rebuild mega eye structure
+                if (cx >= 2 && cx + 2 < size && eyeY + 2 < size) {
+                    for (int256 dx = -2; dx <= 2; dx++) {
+                        uint256 eyeXu = (int256(cx) + dx).toUint256();
+                        grid[eyeY][eyeXu] = GridCell(bodyChar, "body");
+                        grid[eyeY + 2][eyeXu] = GridCell(bodyChar, "body");
+                    }
+                    grid[eyeY + 1][cx - 2] = GridCell(bodyChar, "body");
+                    grid[eyeY + 1][cx - 1] = GridCell(eyeChar, "eye");
+                    grid[eyeY + 1][cx] = GridCell(eyeChar, "eye");
+                    grid[eyeY + 1][cx + 1] = GridCell(eyeChar, "eye");
+                    grid[eyeY + 1][cx + 2] = GridCell(bodyChar, "body");
+                }
+            } else if (adultEyeCount == 2) {
+                // Two 3x3 eye sockets (renderer-v3.js lines 201-218)
                 uint256 blockSpacing = 2;
-                // Left eye socket
+                // Clear and rebuild both 3x3 blocks
                 for (uint256 dy = 0; dy < 3; dy++) {
                     for (uint256 dx = 0; dx < 3; dx++) {
-                        bool isCenter = dy == 1 && dx == 1;
-                        uint256 leftEyeX = cx - blockSpacing - 2 + dx;
-                        result = string.concat(
-                            result,
-                            _renderTextWithClass(
-                                leftEyeX,
-                                eyeY + dy,
+                        // Left eye
+                        if (cx >= blockSpacing + 2 && cx - blockSpacing - 2 + dx < size && eyeY + dy < size) {
+                            if (_isBodyCell(grid[eyeY + dy][cx - blockSpacing - 2 + dx])) {
+                                grid[eyeY + dy][cx - blockSpacing - 2 + dx] = GridCell(" ", "empty");
+                            }
+                            bool isCenter = dy == 1 && dx == 1;
+                            grid[eyeY + dy][cx - blockSpacing - 2 + dx] = GridCell(
                                 isCenter ? eyeChar : bodyChar,
-                                isCenter ? "eye" : "body",
-                                charWidth,
-                                charHeight,
-                                xOffset
-                            )
-                        );
+                                isCenter ? "eye" : "body"
+                            );
+                        }
+                        // Right eye
+                        if (cx + blockSpacing + dx < size && eyeY + dy < size) {
+                            if (_isBodyCell(grid[eyeY + dy][cx + blockSpacing + dx])) {
+                                grid[eyeY + dy][cx + blockSpacing + dx] = GridCell(" ", "empty");
+                            }
+                            bool isCenter = dy == 1 && dx == 1;
+                            grid[eyeY + dy][cx + blockSpacing + dx] = GridCell(
+                                isCenter ? eyeChar : bodyChar,
+                                isCenter ? "eye" : "body"
+                            );
+                        }
                     }
                 }
-                // Right eye socket
-                for (uint256 dy = 0; dy < 3; dy++) {
-                    for (uint256 dx = 0; dx < 3; dx++) {
-                        bool isCenter = dy == 1 && dx == 1;
-                        result = string.concat(
-                            result,
-                            _renderTextWithClass(
-                                cx + blockSpacing + dx,
-                                eyeY + dy,
-                                isCenter ? eyeChar : bodyChar,
-                                isCenter ? "eye" : "body",
-                                charWidth,
-                                charHeight,
-                                xOffset
-                            )
-                        );
-                    }
-                }
-            } else if (cx >= 4) {
-                // 3 eyes: 2x2 blocks (need cx >= 4 for leftmost eye at cx - 3 - 1 = cx - 4)
+            } else {
+                // 3 eyes with 2x2 blocks (renderer-v3.js lines 220-230)
                 for (int256 i = -3; i <= 3; i += 3) {
                     for (uint256 dy = 0; dy < 2; dy++) {
-                        uint256 eyeX1 = uint256(int256(cx) + i);
-                        uint256 eyeX2 = uint256(int256(cx) + i - 1);
-                        result = string.concat(
-                            result,
-                            _renderTextWithClass(eyeX1, eyeY + dy, eyeChar, "eye", charWidth, charHeight, xOffset),
-                            _renderTextWithClass(eyeX2, eyeY + dy, eyeChar, "eye", charWidth, charHeight, xOffset)
-                        );
+                        for (uint256 dx = 0; dx < 2; dx++) {
+                            int256 eyeX = int256(cx) + i + int256(dx);
+                            if (eyeX >= 0 && eyeX < int256(size) && eyeY + dy < size) {
+                                uint256 eyeXu = uint256(eyeX);
+                                if (_isBodyCell(grid[eyeY + dy][eyeXu])) {
+                                    grid[eyeY + dy][eyeXu] = GridCell(" ", "empty");
+                                }
+                                grid[eyeY + dy][eyeXu] = GridCell(eyeChar, "eye");
+                            }
+                        }
                     }
                 }
             }
         }
 
-        // Mouth
+        // Mouth (matching renderer-v3.js lines 232-243)
         seed = _random(seed);
-        // JS: random() > 0.3 means 70% chance (values 0.3 to 1.0)
-        // Convert to: (seed % 10) >= 3 for 70% chance (values 3-9 = 7 out of 10)
         if ((seed % 10) >= 3) {
             uint256 mouthY = eyeY + (isKid ? 2 : 3);
-            // Always render center mouth
-            result =
-                string.concat(result, _renderTextWithClass(cx, mouthY, unicode"─", "mouth", charWidth, charHeight, xOffset));
+            grid[mouthY][cx] = GridCell(unicode"─", "mouth");
 
-            // Randomly add left extension (50% chance)
-            // JS: random() > 0.5 means 50% chance
             seed = _random(seed);
             if ((seed % 2) == 0 && cx > 0) {
-                result = string.concat(
-                    result, _renderTextWithClass(cx - 1, mouthY, unicode"─", "mouth", charWidth, charHeight, xOffset)
-                );
+                grid[mouthY][cx - 1] = GridCell(unicode"─", "mouth");
             }
 
-            // Randomly add right extension (50% chance)
-            // JS: random() > 0.5 means 50% chance
             seed = _random(seed);
             if ((seed % 2) == 0 && cx + 1 < size) {
-                result = string.concat(
-                    result, _renderTextWithClass(cx + 1, mouthY, unicode"─", "mouth", charWidth, charHeight, xOffset)
-                );
+                grid[mouthY][cx + 1] = GridCell(unicode"─", "mouth");
             }
         }
 
-        // Cigarette
+        // Cigarette (matching renderer-v3.js lines 245-255)
         if (hasCigarette) {
             uint256 cigY = eyeY + (isKid ? 2 : 3);
             seed = _random(seed);
-            // JS: random() > 0.5 ? 3 : -3 (right side if > 0.5)
             bool cigRight = (seed % 2) == 0;
-            uint256 cigX = cigRight ? (cx + 3) : (cx >= 3 ? cx - 3 : 0);
-            if (cigX < size) {
-                // Pick cigarette character randomly like JS version
+            int256 cigOffset = cigRight ? int256(3) : int256(-3);
+            uint256 cigX = (int256(cx) + cigOffset).toUint256();
+
+            if (cigX < size && cigY < size) {
                 seed = _random(seed);
                 uint256 cigCharIndex = seed % 3;
                 string memory cigChar = cigCharIndex == 0 ? unicode"≈" : (cigCharIndex == 1 ? unicode"∼" : "~");
-                result = string.concat(
-                    result, _renderTextWithClass(cigX, cigY, cigChar, "cigarette", charWidth, charHeight, xOffset)
-                );
-                // Add ember dot next to cigarette
+                grid[cigY][cigX] = GridCell(cigChar, "cigarette");
+
                 if (cigX + 1 < size) {
-                    result = string.concat(
-                        result, _renderTextWithClass(cigX + 1, cigY, unicode"∙", "cigarette", charWidth, charHeight, xOffset)
-                    );
+                    grid[cigY][cigX + 1] = GridCell(unicode"∙", "cigarette");
                 }
             }
         }
 
-        // Arms - scan actual body edges per row
+        // Arms - scan grid for body edges (matching renderer-v3.js lines 257-281)
         seed = _random(seed);
         uint256 armCount = 1 + (seed % 4);
         seed = _random(seed);
         uint256 armLength = isKid ? (1 + (seed % 2)) : (2 + (seed % 4));
-        string memory armChar = lineArms ? unicode"─" : unicode"█"; // line style uses ─, block style uses solid █
+        string memory armChar = lineArms ? unicode"─" : unicode"█";
 
         for (uint256 a = 0; a < armCount; a++) {
             uint256 currentArmY = bodyStartY + 2 + a * (isKid ? 1 : 2);
-            if (currentArmY >= bodyStartY + bodyHeight) break;
+            if (currentArmY >= bodyStartY + bodyHeight || currentArmY >= size) break;
 
-            // Find left and right body edges at this Y coordinate
+            // Find left and right body edges in grid at this Y coordinate
             uint256 leftBodyEdge = cx;
             uint256 rightBodyEdge = cx;
             bool foundLeft = false;
             bool foundRight = false;
 
-            for (uint256 i = 0; i < bodyPosCount; i++) {
-                uint256 posY = bodyPositions[i] >> 128;
-                uint256 posX = bodyPositions[i] & ((1 << 128) - 1);
-
-                if (posY == currentArmY) {
-                    if (!foundLeft || posX < leftBodyEdge) {
-                        leftBodyEdge = posX;
+            for (uint256 x = 0; x < size; x++) {
+                if (_isBodyCell(grid[currentArmY][x])) {
+                    if (!foundLeft || x < leftBodyEdge) {
+                        leftBodyEdge = x;
                         foundLeft = true;
                     }
-                    if (!foundRight || posX > rightBodyEdge) {
-                        rightBodyEdge = posX;
+                    if (!foundRight || x > rightBodyEdge) {
+                        rightBodyEdge = x;
                         foundRight = true;
                     }
                 }
@@ -558,36 +607,30 @@ contract ProtocolitesRendererHybrid is Ownable, IProtocolitesRenderer {
             if (foundLeft && foundRight) {
                 for (uint256 i = 1; i <= armLength; i++) {
                     if (leftBodyEdge >= i) {
-                        result = string.concat(
-                            result, _renderTextWithClass(leftBodyEdge - i, currentArmY, armChar, "arm", charWidth, charHeight, xOffset)
-                        );
+                        grid[currentArmY][leftBodyEdge - i] = GridCell(armChar, "arm");
                     }
                     if (rightBodyEdge + i < size) {
-                        result = string.concat(
-                            result, _renderTextWithClass(rightBodyEdge + i, currentArmY, armChar, "arm", charWidth, charHeight, xOffset)
-                        );
+                        grid[currentArmY][rightBodyEdge + i] = GridCell(armChar, "arm");
                     }
                 }
             }
         }
 
-        // Legs - scan actual body bottom positions
+        // Legs - scan grid for body bottom positions (matching renderer-v3.js lines 283-324)
         seed = _random(seed);
         uint256 legCount = 1 + (seed % 4);
         seed = _random(seed);
         uint256 legLength = isKid ? (1 + (seed % 2)) : (2 + (seed % 3));
-        string memory legChar = lineLegs ? unicode"│" : unicode"█"; // line style uses │, block style uses solid █
+        string memory legChar = lineLegs ? unicode"│" : unicode"█";
         uint256 legY = bodyStartY + bodyHeight;
 
         // Collect all X positions where body exists at the bottom row
         uint256[] memory bodyBottomPositions = new uint256[](size);
         uint256 bottomCount = 0;
-        if (legY > 0) { // Ensure legY - 1 doesn't underflow
-            for (uint256 i = 0; i < bodyPosCount; i++) {
-                uint256 posY = bodyPositions[i] >> 128;
-                uint256 posX = bodyPositions[i] & ((1 << 128) - 1);
-                if (posY == legY - 1) {
-                    bodyBottomPositions[bottomCount] = posX;
+        if (legY > 0 && legY - 1 < size) {
+            for (uint256 x = 0; x < size; x++) {
+                if (_isBodyCell(grid[legY - 1][x])) {
+                    bodyBottomPositions[bottomCount] = x;
                     bottomCount++;
                 }
             }
@@ -602,7 +645,6 @@ contract ProtocolitesRendererHybrid is Ownable, IProtocolitesRenderer {
                 legPositions[0] = bodyBottomPositions[bottomCount / 2];
                 legPosCount = 1;
             } else if (legCount == 2) {
-                // Use safer index calculation with bounds checking
                 uint256 idx1 = (bottomCount > 4) ? (bottomCount / 4) : 0;
                 uint256 idx2 = (bottomCount > 4) ? (bottomCount * 3 / 4) : (bottomCount > 1 ? bottomCount - 1 : 0);
                 legPositions[0] = bodyBottomPositions[idx1];
@@ -614,7 +656,6 @@ contract ProtocolitesRendererHybrid is Ownable, IProtocolitesRenderer {
                 legPositions[2] = bodyBottomPositions[bottomCount - 1];
                 legPosCount = 3;
             } else {
-                // Use safer index calculation
                 uint256 idx1 = 0;
                 uint256 idx2 = (bottomCount > 3) ? (bottomCount / 3) : (bottomCount > 1 ? 1 : 0);
                 uint256 idx3 = (bottomCount > 3) ? (bottomCount * 2 / 3) : (bottomCount > 2 ? 2 : (bottomCount > 1 ? 1 : 0));
@@ -632,16 +673,14 @@ contract ProtocolitesRendererHybrid is Ownable, IProtocolitesRenderer {
                 if (legX < size) {
                     for (uint256 i = 0; i < legLength; i++) {
                         if (legY + i < size) {
-                            result = string.concat(
-                                result, _renderTextWithClass(legX, legY + i, legChar, "leg", charWidth, charHeight, xOffset)
-                            );
+                            grid[legY + i][legX] = GridCell(legChar, "leg");
                         }
                     }
                 }
             }
         }
 
-        // Antennas - scan actual body top positions
+        // Antennas - scan grid for body top positions (matching renderer-v3.js lines 326-364)
         seed = _random(seed);
         uint256 antennaCount = 1 + (seed % 4);
         seed = _random(seed);
@@ -650,11 +689,9 @@ contract ProtocolitesRendererHybrid is Ownable, IProtocolitesRenderer {
         // Collect all X positions where body exists at the top row
         uint256[] memory bodyTopPositions = new uint256[](size);
         uint256 topCount = 0;
-        for (uint256 i = 0; i < bodyPosCount; i++) {
-            uint256 posY = bodyPositions[i] >> 128;
-            uint256 posX = bodyPositions[i] & ((1 << 128) - 1);
-            if (posY == bodyStartY) {
-                bodyTopPositions[topCount] = posX;
+        for (uint256 x = 0; x < size; x++) {
+            if (_isBodyCell(grid[bodyStartY][x])) {
+                bodyTopPositions[topCount] = x;
                 topCount++;
             }
         }
@@ -668,7 +705,6 @@ contract ProtocolitesRendererHybrid is Ownable, IProtocolitesRenderer {
                 antennaPositions[0] = bodyTopPositions[topCount / 2];
                 antennaPosCount = 1;
             } else if (antennaCount == 2) {
-                // Use safer index calculation with bounds checking
                 uint256 idx1 = (topCount > 4) ? (topCount / 4) : 0;
                 uint256 idx2 = (topCount > 4) ? (topCount * 3 / 4) : (topCount > 1 ? topCount - 1 : 0);
                 antennaPositions[0] = bodyTopPositions[idx1];
@@ -680,7 +716,6 @@ contract ProtocolitesRendererHybrid is Ownable, IProtocolitesRenderer {
                 antennaPositions[2] = bodyTopPositions[topCount - 1];
                 antennaPosCount = 3;
             } else {
-                // Use safer index calculation
                 uint256 idx1 = 0;
                 uint256 idx2 = (topCount > 3) ? (topCount / 3) : (topCount > 1 ? 1 : 0);
                 uint256 idx3 = (topCount > 3) ? (topCount * 2 / 3) : (topCount > 2 ? 2 : (topCount > 1 ? 1 : 0));
@@ -696,74 +731,59 @@ contract ProtocolitesRendererHybrid is Ownable, IProtocolitesRenderer {
             for (uint256 a = 0; a < antennaPosCount; a++) {
                 uint256 antennaX = antennaPositions[a];
                 for (uint256 i = 1; i <= antennaLength; i++) {
-                    // Check for underflow: bodyStartY must be >= i
                     if (bodyStartY >= i) {
                         uint256 antennaY = bodyStartY - i;
                         string memory aChar = (i == antennaLength) ? antennaTip : unicode"│";
                         string memory aClass = (i == antennaLength) ? "antenna-tip" : "antenna";
-                        result = string.concat(
-                            result, _renderTextWithClass(antennaX, antennaY, aChar, aClass, charWidth, charHeight, xOffset)
-                        );
+                        grid[antennaY][antennaX] = GridCell(aChar, aClass);
                     }
                 }
             }
         }
 
-        // Hat
-        if (hatType > 0 && bodyStartY > antennaLength + 1) { // Check for underflow: need bodyStartY >= antennaLength + 2
+        // Hat (matching renderer-v3.js lines 366-397)
+        if (hatType > 0 && bodyStartY > antennaLength + 1) {
             uint256 hatY = bodyStartY - antennaLength - 1;
             if (hatType == 1 && cx >= 2) {
                 // Top hat with brim and stem
                 for (uint256 dx = 0; dx <= 4; dx++) {
                     uint256 hatX = cx - 2 + dx;
-                    if (hatX < size) {
-                        result = string.concat(
-                            result, _renderTextWithClass(hatX, hatY, unicode"▀", "hat", charWidth, charHeight, xOffset)
-                        );
+                    if (hatX < size && hatY < size) {
+                        grid[hatY][hatX] = GridCell(unicode"▀", "hat");
                     }
                 }
-                // Add stem below brim (match JS renderer)
                 if (hatY + 1 < size) {
-                    result = string.concat(
-                        result, _renderTextWithClass(cx, hatY + 1, unicode"█", "hat", charWidth, charHeight, xOffset)
-                    );
+                    grid[hatY + 1][cx] = GridCell(unicode"█", "hat");
                 }
             } else if (hatType == 2 && cx >= 2) {
                 // Flat hat
                 for (uint256 dx = 0; dx <= 4; dx++) {
                     uint256 hatX = cx - 2 + dx;
-                    if (hatX < size) {
-                        result = string.concat(
-                            result, _renderTextWithClass(hatX, hatY, unicode"═", "hat", charWidth, charHeight, xOffset)
-                        );
+                    if (hatX < size && hatY < size) {
+                        grid[hatY][hatX] = GridCell(unicode"═", "hat");
                     }
                 }
             } else if (hatType == 3 && cx >= 2 && hatY > 0) {
-                // Double hat (need hatY >= 1 to render hatY-1)
+                // Double hat
                 for (uint256 dx = 0; dx <= 4; dx++) {
                     uint256 hatX = cx - 2 + dx;
                     if (hatX < size) {
-                        result = string.concat(
-                            result,
-                            _renderTextWithClass(hatX, hatY - 1, unicode"▀", "hat", charWidth, charHeight, xOffset),
-                            _renderTextWithClass(hatX, hatY, unicode"▄", "hat", charWidth, charHeight, xOffset)
-                        );
+                        if (hatY - 1 < size) grid[hatY - 1][hatX] = GridCell(unicode"▀", "hat");
+                        if (hatY < size) grid[hatY][hatX] = GridCell(unicode"▄", "hat");
                     }
                 }
-            } else if (hatType == 4 && cx >= 2 && cx + 2 < size) {
+            } else if (hatType == 4 && cx >= 2 && cx + 2 < size && hatY < size) {
                 // Fancy hat
-                result = string.concat(
-                    result,
-                    _renderTextWithClass(cx - 2, hatY, unicode"╔", "hat", charWidth, charHeight, xOffset),
-                    _renderTextWithClass(cx - 1, hatY, unicode"═", "hat", charWidth, charHeight, xOffset),
-                    _renderTextWithClass(cx, hatY, unicode"═", "hat", charWidth, charHeight, xOffset),
-                    _renderTextWithClass(cx + 1, hatY, unicode"═", "hat", charWidth, charHeight, xOffset),
-                    _renderTextWithClass(cx + 2, hatY, unicode"╗", "hat", charWidth, charHeight, xOffset)
-                );
+                grid[hatY][cx - 2] = GridCell(unicode"╔", "hat");
+                grid[hatY][cx - 1] = GridCell(unicode"═", "hat");
+                grid[hatY][cx] = GridCell(unicode"═", "hat");
+                grid[hatY][cx + 1] = GridCell(unicode"═", "hat");
+                grid[hatY][cx + 2] = GridCell(unicode"╗", "hat");
             }
         }
 
-        return result;
+        // Convert grid to SVG
+        return _gridToSVG(grid, size, charWidth, charHeight, xOffset);
     }
 
     function _random(uint256 seed) private pure returns (uint256) {
@@ -771,6 +791,80 @@ contract ProtocolitesRendererHybrid is Ownable, IProtocolitesRenderer {
         unchecked {
             return (seed * 9301 + 49297) % 233280;
         }
+    }
+
+    /// @notice Safe signed integer multiply-divide matching JS division behavior
+    /// @dev Equivalent to (a * b) / c for signed integers
+    function _mulDiv(int256 a, int256 b, int256 c) private pure returns (int256) {
+        require(c != 0, "Division by zero");
+        return (a * b) / c;
+    }
+
+    /// @notice Absolute value of signed integer
+    function _abs(int256 x) private pure returns (int256) {
+        return x < 0 ? -x : x;
+    }
+
+    /// @notice Check if point is inside body shape (matching renderer-v3.js logic exactly)
+    /// @param bodyType Shape type (0=square, 1=round, 2=diamond, 3=mushroom, 4=invader, 5=ghost)
+    /// @param relX Normalized X coordinate (scaled by 1000)
+    /// @param relY Normalized Y coordinate (scaled by 1000)
+    /// @param isKid Whether this is a kid (affects mushroom shape)
+    /// @param x Actual x offset from center
+    /// @param bodyWidth Width of body for column calculations
+    function _isInBody(uint256 bodyType, int256 relX, int256 relY, bool isKid, int256 x, uint256 bodyWidth)
+        private
+        pure
+        returns (bool)
+    {
+        if (bodyType == 0) {
+            // Square: always true within bounds
+            return true;
+        } else if (bodyType == 1) {
+            // Round: distance from center <= 1.0
+            // JS: Math.sqrt(relX * relX + relY * relY) <= 1.0
+            // Optimized: relX^2 + relY^2 <= 1000 (avoiding sqrt)
+            int256 distSquared = (relX * relX + relY * relY) / SCALE;
+            return distSquared <= SCALE;
+        } else if (bodyType == 2) {
+            // Diamond: manhattan distance <= 1.0
+            // JS: Math.abs(relX) + Math.abs(relY) <= 1.0
+            return (_abs(relX) + _abs(relY)) <= SCALE;
+        } else if (bodyType == 3) {
+            // Mushroom
+            if (isKid) {
+                // JS: if (relY < -0.2) inBody = true; else inBody = Math.abs(relX) <= 0.7;
+                if (relY < -200) return true;
+                return _abs(relX) <= 700;
+            } else {
+                // JS: if (relY < 0) inBody = true; else inBody = Math.abs(relX) <= 0.6;
+                if (relY < 0) return true;
+                return _abs(relX) <= 600;
+            }
+        } else if (bodyType == 4) {
+            // Invader
+            // JS: if (relY < -0.3) inBody = Math.abs(relX) <= 0.7;
+            //     else if (relY < 0.3) inBody = true;
+            //     else inBody = Math.abs(relX) <= 0.85;
+            int256 absX = _abs(relX);
+            if (relY < -300) return absX <= 700;
+            if (relY < 300) return true;
+            return absX <= 850;
+        } else if (bodyType == 5) {
+            // Ghost
+            // JS: if (relY < 0.5) inBody = distGhost <= 1.0;
+            //     else inBody = Math.abs(relX) <= 0.9 && (Math.floor(x + bodyWidth) % 2 === 0 || relY < 0.8);
+            int256 distSquared = (relX * relX + relY * relY) / SCALE;
+            if (relY < 500) {
+                return distSquared <= SCALE;
+            } else {
+                int256 absX = _abs(relX);
+                uint256 columnIndex = (int256(bodyWidth) + x).toUint256();
+                bool oddColumn = (columnIndex % 2) == 0;
+                return absX <= 900 && (oddColumn || relY < 800);
+            }
+        }
+        return false;
     }
 
     function _renderTextWithClass(
