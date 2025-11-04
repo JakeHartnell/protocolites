@@ -540,16 +540,19 @@ contract ProtocolitesRendererHybrid is Ownable, IProtocolitesRenderer {
         seed = _random(seed);
         if ((seed % 10) >= 3) {
             uint256 mouthY = eyeY + (isKid ? 2 : 3);
-            grid[mouthY][cx] = GridCell(unicode"─", "mouth");
+            // Only place mouth where body exists (critical fix)
+            if (mouthY < size && _isBodyCell(grid[mouthY][cx])) {
+                grid[mouthY][cx] = GridCell(unicode"─", "mouth");
 
-            seed = _random(seed);
-            if ((seed % 2) == 0 && cx > 0) {
-                grid[mouthY][cx - 1] = GridCell(unicode"─", "mouth");
-            }
+                seed = _random(seed);
+                if ((seed % 2) == 0 && cx > 0 && _isBodyCell(grid[mouthY][cx - 1])) {
+                    grid[mouthY][cx - 1] = GridCell(unicode"─", "mouth");
+                }
 
-            seed = _random(seed);
-            if ((seed % 2) == 0 && cx + 1 < size) {
-                grid[mouthY][cx + 1] = GridCell(unicode"─", "mouth");
+                seed = _random(seed);
+                if ((seed % 2) == 0 && cx + 1 < size && _isBodyCell(grid[mouthY][cx + 1])) {
+                    grid[mouthY][cx + 1] = GridCell(unicode"─", "mouth");
+                }
             }
         }
 
@@ -559,9 +562,10 @@ contract ProtocolitesRendererHybrid is Ownable, IProtocolitesRenderer {
             seed = _random(seed);
             bool cigRight = (seed % 2) == 0;
             int256 cigOffset = cigRight ? int256(3) : int256(-3);
-            uint256 cigX = (int256(cx) + cigOffset).toUint256();
+            int256 cigXint = int256(cx) + cigOffset;
 
-            if (cigX < size && cigY < size) {
+            if (cigXint >= 0 && cigXint < int256(size) && cigY < size) {
+                uint256 cigX = uint256(cigXint);
                 seed = _random(seed);
                 uint256 cigCharIndex = seed % 3;
                 string memory cigChar = cigCharIndex == 0 ? unicode"≈" : (cigCharIndex == 1 ? unicode"∼" : "~");
@@ -573,7 +577,7 @@ contract ProtocolitesRendererHybrid is Ownable, IProtocolitesRenderer {
             }
         }
 
-        // Arms - scan grid for body edges (matching renderer-v3.js lines 257-281)
+        // Arms - scan from center outward (matching renderer-v3.js lines 257-281)
         seed = _random(seed);
         uint256 armCount = 1 + (seed % 4);
         seed = _random(seed);
@@ -584,34 +588,36 @@ contract ProtocolitesRendererHybrid is Ownable, IProtocolitesRenderer {
             uint256 currentArmY = bodyStartY + 2 + a * (isKid ? 1 : 2);
             if (currentArmY >= bodyStartY + bodyHeight || currentArmY >= size) break;
 
-            // Find left and right body edges in grid at this Y coordinate
+            // Scan from center outward to find body edges (like JS)
             uint256 leftBodyEdge = cx;
             uint256 rightBodyEdge = cx;
-            bool foundLeft = false;
-            bool foundRight = false;
 
-            for (uint256 x = 0; x < size; x++) {
+            // Scan left from center until hitting non-body
+            for (uint256 x = cx; ; x--) {
                 if (_isBodyCell(grid[currentArmY][x])) {
-                    if (!foundLeft || x < leftBodyEdge) {
-                        leftBodyEdge = x;
-                        foundLeft = true;
-                    }
-                    if (!foundRight || x > rightBodyEdge) {
-                        rightBodyEdge = x;
-                        foundRight = true;
-                    }
+                    leftBodyEdge = x;
+                } else {
+                    break;
+                }
+                if (x == 0) break; // Prevent underflow
+            }
+
+            // Scan right from center until hitting non-body
+            for (uint256 x = cx; x < size; x++) {
+                if (_isBodyCell(grid[currentArmY][x])) {
+                    rightBodyEdge = x;
+                } else {
+                    break;
                 }
             }
 
             // Draw arms extending from body edges
-            if (foundLeft && foundRight) {
-                for (uint256 i = 1; i <= armLength; i++) {
-                    if (leftBodyEdge >= i) {
-                        grid[currentArmY][leftBodyEdge - i] = GridCell(armChar, "arm");
-                    }
-                    if (rightBodyEdge + i < size) {
-                        grid[currentArmY][rightBodyEdge + i] = GridCell(armChar, "arm");
-                    }
+            for (uint256 i = 1; i <= armLength; i++) {
+                if (leftBodyEdge >= i) {
+                    grid[currentArmY][leftBodyEdge - i] = GridCell(armChar, "arm");
+                }
+                if (rightBodyEdge + i < size) {
+                    grid[currentArmY][rightBodyEdge + i] = GridCell(armChar, "arm");
                 }
             }
         }

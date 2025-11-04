@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Renderer V4 Test</title>
+    <style>
+        body {
+            margin: 20px;
+            font-family: monospace;
+            background: #f0f0f0;
+        }
+        #container {
+            display: inline-block;
+            background: white;
+            padding: 20px;
+            border: 2px solid #333;
+        }
+    </style>
+</head>
+<body>
+    <h2>Renderer V4 - SVG with Embedded JS Animation</h2>
+    <div id="container"></div>
+
+    <script>
+        // Set up test data
+        const tokenId = 1;
+        const dna = '0x1234567890abcdef';
+        const isKid = false;
+        const parentDna = '0x0';
+        const size = 24;
+
+        // Load and execute renderer
+        fetch('renderer-v4.js')
+            .then(r => r.text())
+            .then(code => {
+                eval(code);
+                // The renderer should have set document.body.innerHTML with the SVG
+                // Let's move it to our container
+                const svg = document.body.querySelector('svg');
+                if (svg) {
+                    document.getElementById('container').appendChild(svg);
+                }
+            })
+            .catch(e => {
+                document.getElementById('container').innerHTML = '<p style="color:red">Error loading renderer: ' + e.message + '</p>';
+            });
+    </script>
+</body>
+</html>

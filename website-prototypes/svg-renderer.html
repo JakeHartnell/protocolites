@@ -303,6 +303,14 @@
                 flex-shrink: 0;
             }
 
+            .spreader-preview iframe {
+                width: 600px;
+                height: 600px;
+                border: none;
+                transform: scale(0.333);
+                transform-origin: 0 0;
+            }
+
             .spreader-info {
                 font-size: 9px;
                 flex: 1;
@@ -450,6 +458,14 @@
                 margin-bottom: 8px;
                 position: relative;
                 overflow: hidden;
+            }
+
+            .infection-preview iframe {
+                width: 600px;
+                height: 600px;
+                border: none;
+                transform: scale(0.3);
+                transform-origin: 0 0;
             }
 
             .infection-label {
@@ -1061,18 +1077,46 @@
                 const preview = document.createElement("div");
                 preview.className = "spreader-preview";
 
+                // Try to display either animated SVG or HTML animation
                 if (nft.metadata && nft.metadata.image) {
-                    const img = document.createElement("img");
-                    img.src = nft.metadata.image;
-                    img.style.cssText =
-                        "width: 100%; height: 100%; object-fit: contain;";
-                    preview.appendChild(img);
+                    const imageData = decodeDataURI(nft.metadata.image);
+                    if (imageData && imageData.startsWith('<svg')) {
+                        // It's an SVG - display it directly
+                        const img = document.createElement('img');
+                        img.src = nft.metadata.image;
+                        img.style.width = '100%';
+                        img.style.height = '100%';
+                        img.style.objectFit = 'contain';
+                        preview.appendChild(img);
+                    } else if (nft.metadata.animation_url) {
+                        // Fall back to animation_url if image is not SVG
+                        const html = decodeDataURI(nft.metadata.animation_url);
+                        if (html) {
+                            const iframe = document.createElement("iframe");
+                            iframe.sandbox = "allow-scripts allow-same-origin";
+                            iframe.srcdoc = html;
+                            preview.appendChild(iframe);
+                        }
+                    }
+                } else if (nft.metadata && nft.metadata.animation_url) {
+                    // Legacy: only animation_url available
+                    const html = decodeDataURI(nft.metadata.animation_url);
+                    if (html) {
+                        const iframe = document.createElement("iframe");
+                        iframe.sandbox = "allow-scripts allow-same-origin";
+                        iframe.srcdoc = html;
+                        preview.appendChild(iframe);
+                    }
                 }
 
                 // Double click preview to open modal
                 preview.ondblclick = (e) => {
                     e.stopPropagation();
-                    openModal(nft.metadata.image);
+                    // Prefer image for SVG, fall back to animation_url
+                    const modalUrl = (nft.metadata.image && decodeDataURI(nft.metadata.image)?.startsWith('<svg'))
+                        ? nft.metadata.image
+                        : nft.metadata.animation_url;
+                    openModal(modalUrl);
                 };
 
                 const info = document.createElement("div");
@@ -1267,12 +1311,36 @@
                 const preview = document.createElement("div");
                 preview.className = "infection-preview";
 
+                // Try to display either animated SVG or HTML animation
                 if (infection.metadata && infection.metadata.image) {
-                    const img = document.createElement("img");
-                    img.src = infection.metadata.image;
-                    img.style.cssText =
-                        "width: 100%; height: 100%; object-fit: contain;";
-                    preview.appendChild(img);
+                    const imageData = decodeDataURI(infection.metadata.image);
+                    if (imageData && imageData.startsWith('<svg')) {
+                        // It's an SVG - display it directly
+                        const img = document.createElement('img');
+                        img.src = infection.metadata.image;
+                        img.style.width = '100%';
+                        img.style.height = '100%';
+                        img.style.objectFit = 'contain';
+                        preview.appendChild(img);
+                    } else if (infection.metadata.animation_url) {
+                        // Fall back to animation_url if image is not SVG
+                        const html = decodeDataURI(infection.metadata.animation_url);
+                        if (html) {
+                            const iframe = document.createElement("iframe");
+                            iframe.sandbox = "allow-scripts allow-same-origin";
+                            iframe.srcdoc = html;
+                            preview.appendChild(iframe);
+                        }
+                    }
+                } else if (infection.metadata && infection.metadata.animation_url) {
+                    // Legacy: only animation_url available
+                    const html = decodeDataURI(infection.metadata.animation_url);
+                    if (html) {
+                        const iframe = document.createElement("iframe");
+                        iframe.sandbox = "allow-scripts allow-same-origin";
+                        iframe.srcdoc = html;
+                        preview.appendChild(iframe);
+                    }
                 }
 
                 const label = document.createElement("div");
@@ -1285,17 +1353,45 @@
                 card.appendChild(preview);
                 card.appendChild(label);
 
-                card.onclick = () => openModal(infection.metadata.image);
+                card.onclick = () => {
+                    // Prefer image for SVG, fall back to animation_url
+                    const modalUrl = (infection.metadata.image && decodeDataURI(infection.metadata.image)?.startsWith('<svg'))
+                        ? infection.metadata.image
+                        : infection.metadata.animation_url;
+                    openModal(modalUrl);
+                };
 
                 return card;
             }
 
-            function openModal(imageDataUri) {
+            function openModal(contentUrl) {
                 const modal = document.getElementById("modal");
-                const img = document.getElementById("modalImage");
+                let modalContent = document.querySelector(".modal-content");
 
-                if (imageDataUri) {
-                    img.src = imageDataUri;
+                // Clear existing content (keep only close button)
+                const existingIframe = modalContent.querySelector("iframe");
+                const existingImg = modalContent.querySelector("img");
+                if (existingIframe) existingIframe.remove();
+                if (existingImg) existingImg.remove();
+
+                if (contentUrl) {
+                    const decoded = decodeDataURI(contentUrl);
+                    if (decoded) {
+                        if (decoded.startsWith('<svg')) {
+                            // It's an SVG - display as img
+                            const img = document.createElement('img');
+                            img.src = contentUrl;
+                            img.className = 'modal-iframe';
+                            modalContent.appendChild(img);
+                        } else {
+                            // It's HTML - display as iframe
+                            const iframe = document.createElement("iframe");
+                            iframe.className = "modal-iframe";
+                            iframe.sandbox = "allow-scripts allow-same-origin";
+                            iframe.srcdoc = decoded;
+                            modalContent.appendChild(iframe);
+                        }
+                    }
                 }
 
                 modal.classList.add("active");

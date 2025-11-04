@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>SVG Output Comparison</title>
+    <style>
+        body {
+            margin: 20px;
+            font-family: monospace;
+            background: #f0f0f0;
+        }
+        .container {
+            display: flex;
+            gap: 20px;
+            flex-wrap: wrap;
+        }
+        .panel {
+            background: white;
+            padding: 20px;
+            border: 2px solid #333;
+        }
+        h2 {
+            margin-top: 0;
+        }
+        svg {
+            border: 1px solid #ccc;
+        }
+    </style>
+</head>
+<body>
+    <h1>Renderer Comparison Test</h1>
+
+    <div class="container">
+        <div class="panel">
+            <h2>JavaScript Renderer (renderer-v3.js)</h2>
+            <div id="js-output"></div>
+        </div>
+
+        <div class="panel">
+            <h2>Solidity SVG Output (Paste Here)</h2>
+            <div id="sol-output">
+                <!-- Paste Solidity SVG output here -->
+            </div>
+        </div>
+    </div>
+
+    <script src="renderer-v3.js"></script>
+    <script>
+        // Render using JS
+        const tokenId = 1;
+        const dna = '0x0000000000000000000000000000000000000000000000000000000000000001';
+        const isKid = false;
+        const parentDna = '0x0';
+        const size = 24;
+
+        // The renderer-v3.js should have rendered to document.body
+        // Let's move it
+        setTimeout(() => {
+            const svg = document.body.querySelector('svg:last-of-type');
+            if (svg) {
+                document.getElementById('js-output').appendChild(svg.cloneNode(true));
+            }
+        }, 100);
+    </script>
+</body>
+</html>
