@@ -152,28 +152,28 @@ contract ProtocolitesRendererHybrid is Ownable, IProtocolitesRenderer {
         uint256 fontSize = size == 24 ? 20 : 16;
         uint256 charWidth = (fontSize * 6) / 10; // fontSize * 0.6
         uint256 charHeight = fontSize;
-        uint256 width = size * charWidth;
-        uint256 height = size * charHeight;
+        uint256 creatureWidth = size * charWidth;
+        uint256 creatureHeight = size * charHeight;
 
-        // No offset needed - render in grid coordinates, viewBox will be sized to fit
-        uint256 xOffset = 0;
+        // Use square viewBox (max dimension) to prevent aspect ratio distortion
+        uint256 maxDim = creatureWidth > creatureHeight ? creatureWidth : creatureHeight;
+
+        // Center creature in square viewBox
+        uint256 xOffset = (maxDim - creatureWidth) / 2;
+        uint256 yOffset = (maxDim - creatureHeight) / 2;
 
         // Generate creature parts
-        string memory creature = renderAnimatedCreature(dna, isKid, seed, charWidth, charHeight, xOffset);
+        string memory creature = renderAnimatedCreature(dna, isKid, seed, charWidth, charHeight, xOffset, yOffset);
 
         // Build CSS animations
         string memory animations = buildAnimations(tempIndex, familyColor, fontSize);
 
         return string.concat(
             '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ',
-            LibString.toString(width),
+            LibString.toString(maxDim),
             " ",
-            LibString.toString(height),
-            '" width="',
-            LibString.toString(width),
-            '" height="',
-            LibString.toString(height),
-            '" style="background:#fff">',
+            LibString.toString(maxDim),
+            '" width="100%" height="100%" preserveAspectRatio="xMidYMid meet" style="background:#fff">',
             "<defs><style>",
             animations,
             "</style></defs>",
@@ -185,8 +185,9 @@ contract ProtocolitesRendererHybrid is Ownable, IProtocolitesRenderer {
     /// @notice Hash function matching JS renderer's hashCode
     /// @dev Implements: h = ((h << 5) - h) + s.charCodeAt(i); h &= h;
     function _hashCode(uint256 dna) private pure returns (uint256) {
-        // Convert dna to hex string representation to match JS input
-        string memory dnaStr = LibString.toHexString(dna);
+        // Convert dna to 66-character hex string (0x + 64 hex digits) to match JS input
+        // JS receives DNA as full padded hex string from tokenURI HTML
+        string memory dnaStr = LibString.toHexString(dna, 32); // 32 bytes = 64 hex chars
         bytes memory dnaBytes = bytes(dnaStr);
 
         int256 h = 0;
@@ -204,12 +205,13 @@ contract ProtocolitesRendererHybrid is Ownable, IProtocolitesRenderer {
     /// @notice Build CSS styles (animations removed)
     function buildAnimations(uint256 tempIndex, string memory color, uint256 fontSize) private pure returns (string memory) {
         // Base styles only - no animations
+        // CRITICAL: Use monospace with explicit letter-spacing to match HTML character width
         return string.concat(
             "text{font-family:'Courier New',monospace;font-size:",
             LibString.toString(fontSize),
             "px;font-weight:400;fill:",
             color,
-            ";dominant-baseline:text-before-edge}"
+            ";dominant-baseline:text-before-edge;text-anchor:start;letter-spacing:0px;word-spacing:0px}"
         );
     }
 
@@ -317,8 +319,9 @@ contract ProtocolitesRendererHybrid is Ownable, IProtocolitesRenderer {
     /// @param charWidth Character width in pixels
     /// @param charHeight Character height in pixels
     /// @param xOffset X offset for positioning
+    /// @param yOffset Y offset for positioning
     /// @return SVG text elements as concatenated string
-    function _gridToSVG(GridCell[][] memory grid, uint256 size, uint256 charWidth, uint256 charHeight, uint256 xOffset)
+    function _gridToSVG(GridCell[][] memory grid, uint256 size, uint256 charWidth, uint256 charHeight, uint256 xOffset, uint256 yOffset)
         private
         pure
         returns (string memory)
@@ -329,7 +332,7 @@ contract ProtocolitesRendererHybrid is Ownable, IProtocolitesRenderer {
                 if (!_isEmptyCell(grid[y][x])) {
                     result = string.concat(
                         result,
-                        _renderTextWithClass(x, y, grid[y][x].char, grid[y][x].cellType, charWidth, charHeight, xOffset)
+                        _renderTextWithClass(x, y, grid[y][x].char, grid[y][x].cellType, charWidth, charHeight, xOffset, yOffset)
                     );
                 }
             }
@@ -337,7 +340,7 @@ contract ProtocolitesRendererHybrid is Ownable, IProtocolitesRenderer {
         return result;
     }
 
-    function renderAnimatedCreature(uint256 dna, bool isKid, uint256 seed, uint256 charWidth, uint256 charHeight, uint256 xOffset)
+    function renderAnimatedCreature(uint256 dna, bool isKid, uint256 seed, uint256 charWidth, uint256 charHeight, uint256 xOffset, uint256 yOffset)
         private
         pure
         returns (string memory)
@@ -387,10 +390,11 @@ contract ProtocolitesRendererHybrid is Ownable, IProtocolitesRenderer {
 
         // Eyes with proper grid clearing (matching renderer-v3.js lines 140-230)
         uint256 eyeY = bodyStartY + 1;
-        seed = _random(seed);
-        uint256 eyeCount = 1 + (seed % 3);
 
         if (isKid) {
+            // Kid eyes (JS line 142 calls random() inside kid branch)
+            seed = _random(seed);
+            uint256 eyeCount = 1 + (seed % 3);
             if (eyeCount == 1) {
                 // Clear 3x2 area for single eye socket
                 for (uint256 dy = 0; dy < 2; dy++) {
@@ -457,7 +461,7 @@ contract ProtocolitesRendererHybrid is Ownable, IProtocolitesRenderer {
                 }
             }
         } else {
-            // Adult eyes
+            // Adult eyes (JS line 182 calls random() again in else branch)
             seed = _random(seed);
             uint256 adultEyeCount = 1 + (seed % 3);
 
@@ -519,17 +523,27 @@ contract ProtocolitesRendererHybrid is Ownable, IProtocolitesRenderer {
                 }
             } else {
                 // 3 eyes with 2x2 blocks (renderer-v3.js lines 220-230)
+                // JS places eyes at cx+i-1 and cx+i for i = -3, 0, 3
                 for (int256 i = -3; i <= 3; i += 3) {
                     for (uint256 dy = 0; dy < 2; dy++) {
-                        for (uint256 dx = 0; dx < 2; dx++) {
-                            int256 eyeX = int256(cx) + i + int256(dx);
-                            if (eyeX >= 0 && eyeX < int256(size) && eyeY + dy < size) {
-                                uint256 eyeXu = uint256(eyeX);
-                                if (_isBodyCell(grid[eyeY + dy][eyeXu])) {
-                                    grid[eyeY + dy][eyeXu] = GridCell(" ", "empty");
-                                }
-                                grid[eyeY + dy][eyeXu] = GridCell(eyeChar, "eye");
+                        // Place at cx + i - 1
+                        int256 eyeX1 = int256(cx) + i - 1;
+                        if (eyeX1 >= 0 && eyeX1 < int256(size) && eyeY + dy < size) {
+                            uint256 eyeXu = uint256(eyeX1);
+                            if (_isBodyCell(grid[eyeY + dy][eyeXu])) {
+                                grid[eyeY + dy][eyeXu] = GridCell(" ", "empty");
                             }
+                            grid[eyeY + dy][eyeXu] = GridCell(eyeChar, "eye");
+                        }
+
+                        // Place at cx + i
+                        int256 eyeX2 = int256(cx) + i;
+                        if (eyeX2 >= 0 && eyeX2 < int256(size) && eyeY + dy < size) {
+                            uint256 eyeXu = uint256(eyeX2);
+                            if (_isBodyCell(grid[eyeY + dy][eyeXu])) {
+                                grid[eyeY + dy][eyeXu] = GridCell(" ", "empty");
+                            }
+                            grid[eyeY + dy][eyeXu] = GridCell(eyeChar, "eye");
                         }
                     }
                 }
@@ -557,8 +571,16 @@ contract ProtocolitesRendererHybrid is Ownable, IProtocolitesRenderer {
         }
 
         // Cigarette (matching renderer-v3.js lines 245-255)
+        // IMPORTANT: JS calls random() for char FIRST (line 249), then position (line 250)
         if (hasCigarette) {
             uint256 cigY = eyeY + (isKid ? 2 : 3);
+
+            // Get cigarette character first (JS line 249)
+            seed = _random(seed);
+            uint256 cigCharIndex = seed % 3;
+            string memory cigChar = cigCharIndex == 0 ? unicode"≈" : (cigCharIndex == 1 ? unicode"∼" : "~");
+
+            // Then get position (JS line 250)
             seed = _random(seed);
             bool cigRight = (seed % 2) == 0;
             int256 cigOffset = cigRight ? int256(3) : int256(-3);
@@ -566,9 +588,6 @@ contract ProtocolitesRendererHybrid is Ownable, IProtocolitesRenderer {
 
             if (cigXint >= 0 && cigXint < int256(size) && cigY < size) {
                 uint256 cigX = uint256(cigXint);
-                seed = _random(seed);
-                uint256 cigCharIndex = seed % 3;
-                string memory cigChar = cigCharIndex == 0 ? unicode"≈" : (cigCharIndex == 1 ? unicode"∼" : "~");
                 grid[cigY][cigX] = GridCell(cigChar, "cigarette");
 
                 if (cigX + 1 < size) {
@@ -580,8 +599,15 @@ contract ProtocolitesRendererHybrid is Ownable, IProtocolitesRenderer {
         // Arms - scan from center outward (matching renderer-v3.js lines 257-281)
         seed = _random(seed);
         uint256 armCount = 1 + (seed % 4);
-        seed = _random(seed);
-        uint256 armLength = isKid ? (1 + (seed % 2)) : (2 + (seed % 4));
+        // JS line 259: random() called INSIDE ternary (different call for kid vs adult)
+        uint256 armLength;
+        if (isKid) {
+            seed = _random(seed);
+            armLength = 1 + (seed % 2);
+        } else {
+            seed = _random(seed);
+            armLength = 2 + (seed % 4);
+        }
         string memory armChar = lineArms ? unicode"─" : unicode"█";
 
         for (uint256 a = 0; a < armCount; a++) {
@@ -612,6 +638,7 @@ contract ProtocolitesRendererHybrid is Ownable, IProtocolitesRenderer {
             }
 
             // Draw arms extending from body edges
+            // NOTE: This matches JS behavior which can overwrite eyes when center is not body
             for (uint256 i = 1; i <= armLength; i++) {
                 if (leftBodyEdge >= i) {
                     grid[currentArmY][leftBodyEdge - i] = GridCell(armChar, "arm");
@@ -625,8 +652,15 @@ contract ProtocolitesRendererHybrid is Ownable, IProtocolitesRenderer {
         // Legs - scan grid for body bottom positions (matching renderer-v3.js lines 283-324)
         seed = _random(seed);
         uint256 legCount = 1 + (seed % 4);
-        seed = _random(seed);
-        uint256 legLength = isKid ? (1 + (seed % 2)) : (2 + (seed % 3));
+        // JS line 292: random() called INSIDE ternary (different call for kid vs adult)
+        uint256 legLength;
+        if (isKid) {
+            seed = _random(seed);
+            legLength = 1 + (seed % 2);
+        } else {
+            seed = _random(seed);
+            legLength = 2 + (seed % 3);
+        }
         string memory legChar = lineLegs ? unicode"│" : unicode"█";
         uint256 legY = bodyStartY + bodyHeight;
 
@@ -651,8 +685,9 @@ contract ProtocolitesRendererHybrid is Ownable, IProtocolitesRenderer {
                 legPositions[0] = bodyBottomPositions[bottomCount / 2];
                 legPosCount = 1;
             } else if (legCount == 2) {
-                uint256 idx1 = (bottomCount > 4) ? (bottomCount / 4) : 0;
-                uint256 idx2 = (bottomCount > 4) ? (bottomCount * 3 / 4) : (bottomCount > 1 ? bottomCount - 1 : 0);
+                // Match JS: Math.floor(length * 0.25) and Math.floor(length * 0.75)
+                uint256 idx1 = (bottomCount * 1) / 4;
+                uint256 idx2 = (bottomCount * 3) / 4;
                 legPositions[0] = bodyBottomPositions[idx1];
                 legPositions[1] = bodyBottomPositions[idx2];
                 legPosCount = 2;
@@ -689,8 +724,14 @@ contract ProtocolitesRendererHybrid is Ownable, IProtocolitesRenderer {
         // Antennas - scan grid for body top positions (matching renderer-v3.js lines 326-364)
         seed = _random(seed);
         uint256 antennaCount = 1 + (seed % 4);
-        seed = _random(seed);
-        uint256 antennaLength = isKid ? 1 : (1 + (seed % 2));
+        // CRITICAL: JS line 330 only calls random() for adults (ternary short-circuits for kids)
+        uint256 antennaLength;
+        if (isKid) {
+            antennaLength = 1;  // No random call for kids
+        } else {
+            seed = _random(seed);
+            antennaLength = 1 + (seed % 2);
+        }
 
         // Collect all X positions where body exists at the top row
         uint256[] memory bodyTopPositions = new uint256[](size);
@@ -711,8 +752,9 @@ contract ProtocolitesRendererHybrid is Ownable, IProtocolitesRenderer {
                 antennaPositions[0] = bodyTopPositions[topCount / 2];
                 antennaPosCount = 1;
             } else if (antennaCount == 2) {
-                uint256 idx1 = (topCount > 4) ? (topCount / 4) : 0;
-                uint256 idx2 = (topCount > 4) ? (topCount * 3 / 4) : (topCount > 1 ? topCount - 1 : 0);
+                // Match JS: Math.floor(length * 0.25) and Math.floor(length * 0.75)
+                uint256 idx1 = (topCount * 1) / 4;
+                uint256 idx2 = (topCount * 3) / 4;
                 antennaPositions[0] = bodyTopPositions[idx1];
                 antennaPositions[1] = bodyTopPositions[idx2];
                 antennaPosCount = 2;
@@ -789,7 +831,7 @@ contract ProtocolitesRendererHybrid is Ownable, IProtocolitesRenderer {
         }
 
         // Convert grid to SVG
-        return _gridToSVG(grid, size, charWidth, charHeight, xOffset);
+        return _gridToSVG(grid, size, charWidth, charHeight, xOffset, yOffset);
     }
 
     function _random(uint256 seed) private pure returns (uint256) {
@@ -880,16 +922,20 @@ contract ProtocolitesRendererHybrid is Ownable, IProtocolitesRenderer {
         string memory className,
         uint256 charWidth,
         uint256 charHeight,
-        uint256 xOffset
+        uint256 xOffset,
+        uint256 yOffset
     ) private pure returns (string memory) {
+        // Use textLength to force exact character width (matches HTML positioning)
         return string.concat(
             '<text x="',
             LibString.toString(x * charWidth + xOffset),
             '" y="',
-            LibString.toString(y * charHeight),
+            LibString.toString(y * charHeight + yOffset),
             '" class="',
             className,
-            '">',
+            '" textLength="',
+            LibString.toString(charWidth),
+            '" lengthAdjust="spacingAndGlyphs">',
             char,
             "</text>"
         );

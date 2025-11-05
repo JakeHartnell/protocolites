@@ -80,11 +80,19 @@ contract TestRendererComparison is Test {
 
         string memory kidSvg = renderer.generateSVG(2, kidData);
 
-        // Adults should have larger viewBox
-        // Adult: fontSize=20, charWidth=20*0.6=12, width=24*12=288, height=24*20=480
-        assertTrue(contains(adultSvg, "viewBox=\"0 0 288 480"));
-        // Kid: fontSize=16, charWidth=16*0.6=9.6, width=16*9=144, height=16*16=256
-        assertTrue(contains(kidSvg, "viewBox=\"0 0 144 256"));
+        // Log full outputs
+        console.log("=== ADULT SVG ===");
+        console.log(adultSvg);
+        console.log("");
+        console.log("=== KID SVG ===");
+        console.log(kidSvg);
+        console.log("");
+
+        // Adults should have larger viewBox (square viewBox based on max dimension)
+        // Adult: fontSize=20, charWidth=12, width=288, height=480, maxDim=480
+        assertTrue(contains(adultSvg, "viewBox=\"0 0 480 480"));
+        // Kid: fontSize=16, charWidth=9 (rounded), width=144, height=256, maxDim=256
+        assertTrue(contains(kidSvg, "viewBox=\"0 0 256 256"));
 
         console.log("Adult SVG length:", bytes(adultSvg).length);
         console.log("Kid SVG length:", bytes(kidSvg).length);
